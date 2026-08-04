@@ -74,7 +74,12 @@ const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif
 //
 // (The function is still named callClaude for historical reasons; the relay it
 // calls now talks to Google Gemini, not Claude. The browser never sees the key.)
-const GEMINI_MIN_GAP_MS = 4200; // 60000 / 4200 ≈ 14 calls per minute (< 15 cap)
+// Pacing between AI calls. The free Gemini tier allows ~15 calls/min PER KEY,
+// and the relay rotates across 3 keys, so the safe combined ceiling is ~45/min.
+// 1600ms ≈ 37 calls/min leaves comfortable margin, and if any single key does
+// hit its cap the relay just rotates to the next one. (Was 4200ms — tuned for a
+// single key. With 3 keys we can go much faster without risking rate limits.)
+const GEMINI_MIN_GAP_MS = 1600; // 60000 / 1600 ≈ 37 calls per minute across 3 keys
 let _geminiChain = Promise.resolve();
 let _geminiLast = 0;
 function throttleGemini() {
@@ -408,9 +413,19 @@ async function searchScene(q, opts) {
         rateLimited = true;
     }
     const flat = settled.filter((s) => s.status === "fulfilled").flatMap((s) => s.value);
-    const vids = flat.filter((r) => r.type === "video");
-    const phts = flat.filter((r) => r.type === "photo");
-    const out = [...vids, ...phts];
+    // "Clips / scene" (perPage) means N videos AND N photos — BALANCED. With both
+    // Pexels and Pixabay on, each source returns its own perPage, so a type can
+    // arrive as up to 2×perPage; we cap EACH type to perPage independently. This
+    // is what stops the "4 videos but only 2 images" lopsidedness: videos and
+    // photos are trimmed to the same target, so a mixed pick is always even.
+    const vids = flat.filter((r) => r.type === "video").slice(0, perPage);
+    const phts = flat.filter((r) => r.type === "photo").slice(0, perPage);
+    // Interleave so the grid alternates video/photo instead of all-videos-first.
+    const out = [];
+    for (let i = 0; i < Math.max(vids.length, phts.length); i++) {
+      if (i < vids.length) out.push(vids[i]);
+      if (i < phts.length) out.push(phts[i]);
+    }
     // Pexels refused (hit its free hourly limit) AND nothing came back from
     // Pixabay either — tell the caller so it can show a real message instead of
     // silently leaving the old footage in place.
@@ -645,7 +660,9 @@ function FootageFinder() {
         lines = splitIntoScenes(script);
       }
       // phase 1 — keywords in batches (full context)
-      const size = 5;
+      // 10 scenes per call: fewer round-trips = much faster on long scripts. The
+      // FULL script still rides along in every call, so context/drift is unchanged.
+      const size = 10;
       const batches = [];
       for (let i = 0; i < lines.length; i += size) batches.push(lines.slice(i, i + size));
       let keywords = [];
