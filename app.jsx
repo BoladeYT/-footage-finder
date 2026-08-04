@@ -413,19 +413,12 @@ async function searchScene(q, opts) {
         rateLimited = true;
     }
     const flat = settled.filter((s) => s.status === "fulfilled").flatMap((s) => s.value);
-    // "Clips / scene" (perPage) is applied PER SOURCE, PER MEDIA TYPE. Each API
-    // call already asked for perPage, so with both Pexels AND Pixabay on you get
-    // perPage videos from each (up to 2×perPage videos) AND perPage photos from
-    // each. We keep them all — no cross-source cap. If one type comes back short,
-    // that source simply had fewer real matches for the query (not a bug). We
-    // interleave video/photo so the grid alternates instead of all-videos-first.
+    // Keep everything each source returned (no cross-source cap). Group by type:
+    // all videos first, then all photos. This makes it easier to scan the motion
+    // options together, then the stills, rather than jumping back and forth.
     const vids = flat.filter((r) => r.type === "video");
     const phts = flat.filter((r) => r.type === "photo");
-    const out = [];
-    for (let i = 0; i < Math.max(vids.length, phts.length); i++) {
-      if (i < vids.length) out.push(vids[i]);
-      if (i < phts.length) out.push(phts[i]);
-    }
+    const out = [...vids, ...phts];
     // Pexels refused (hit its free hourly limit) AND nothing came back from
     // Pixabay either — tell the caller so it can show a real message instead of
     // silently leaving the old footage in place.
@@ -1065,7 +1058,12 @@ function FootageFinder() {
                   {s.results.length === 0 ? (
                     <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">No results — try Shuffle or Regenerate.</div>
                   ) : (
-                    <div className={`grid gap-2 ${(s.perScene || perScene) === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
+                    // Always the neat responsive grid — 2 columns on phones, 4 on
+                    // desktop — no matter the clips-per-scene setting. (It used to
+                    // narrow to 2 columns for "2 clips" back when that meant only 2
+                    // tiles; now "2 clips" can be 6-8 tiles per source, so it needs
+                    // the same tidy 4-wide layout that "4 clips" uses.)
+                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
                       {s.results.map((r) => {
                         const sel = !!selected[r.id];
                         return (
