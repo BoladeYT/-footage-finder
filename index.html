@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Footage Finder</title>
+
+    <!-- Tailwind (the styling utility classes your app uses) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React + ReactDOM (the app framework), classic global builds -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel: lets the browser read the JSX in app.jsx directly, no build step -->
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+
+    <style>
+      html, body, #root { height: 100%; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!--
+      Boot sequence:
+      1. Load the lucide-react icon library as a module and expose it globally.
+      2. Fetch app.jsx as text, compile the JSX to plain JS with Babel,
+         then run it. app.jsx reads React / ReactDOM / lucideReact from globals.
+    -->
+    <script type="module">
+      import * as lucideReact from "https://esm.sh/lucide-react@0.462.0?deps=react@18.3.1";
+      window.lucideReact = lucideReact;
+
+      const source = await fetch("./app.jsx").then((r) => r.text());
+      const compiled = Babel.transform(source, { presets: ["react"] }).code;
+      // Run at global scope so it can see React/ReactDOM/lucideReact.
+      (0, eval)(compiled);
+    </script>
+  </body>
+</html>
