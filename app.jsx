@@ -309,13 +309,18 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage
 /* ---- Pixabay ---- */
 async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   const pbOrient = orientation === "portrait" ? "vertical" : "horizontal";
+  // Pixabay REQUIRES per_page >= 3 — asking for 2 makes it reject the whole
+  // request and return nothing (this is why "2 clips" showed zero Pixabay
+  // photos while "4 clips" worked). So we ask for at least 3, then trim back
+  // to the count the user actually wanted. Same trick the video call uses.
+  const ask = Math.max(3, perPage);
   const r = await fetch(
-    `https://pixabay.com/api/?key=${key}&q=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&image_type=photo&orientation=${pbOrient}`
+    `https://pixabay.com/api/?key=${key}&q=${encodeURIComponent(q)}&per_page=${ask}&page=${page}&image_type=photo&orientation=${pbOrient}`
   );
   if (r.status === 429) throw new Error("PIXABAY_RATE");
   if (!r.ok) return [];
   const d = await r.json();
-  return (d.hits || []).map((h) => ({
+  return (d.hits || []).slice(0, perPage).map((h) => ({
     id: "pb-p-" + h.id,
     type: "photo",
     source: "Pixabay",
