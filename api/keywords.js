@@ -17,14 +17,24 @@
 // specific version (which is exactly what breaks a pinned name over time).
 const MODEL = "gemini-flash-latest";
 
+// The relay can hold up to 3 Gemini keys: GEMINI_KEY (main) plus optional
+// GEMINI_KEY2 / GEMINI_KEY3 from SEPARATE free Google accounts. Set them in the
+// Vercel dashboard (Settings → Environment Variables). We rotate to the next key
+// only when one is rate-limited, tripling the free-tier headroom for long scripts.
+function geminiKeys() {
+  return ["GEMINI_KEY", "GEMINI_KEY2", "GEMINI_KEY3"]
+    .map((n) => process.env[n])
+    .filter(Boolean);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Use POST" });
     return;
   }
 
-  const apiKey = process.env.GEMINI_KEY;
-  if (!apiKey) {
+  const keys = geminiKeys();
+  if (!keys.length) {
     res.status(500).json({ error: "Server missing GEMINI_KEY. Set it in Vercel settings." });
     return;
   }
@@ -36,43 +46,50 @@ export default async function handler(req, res) {
     return;
   }
 
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.7,
+      // Roomy cap: newer Gemini models "think" before answering, and that
+      // thinking shares the output budget. The scene-segmentation step also
+      // returns the whole script as many short strings in one call. 2048
+      // truncated those long lists mid-array; 8192 gives ample headroom.
+      maxOutputTokens: 8192,
+    },
+  });
+
   try {
-    const upstream = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.7,
-            // Generous cap: newer Gemini models "think" before answering, and
-            // that thinking shares the output budget. Too low a cap makes the
-            // reasoning leak into (or truncate) the real answer, so keep room.
-            maxOutputTokens: 2048,
-          },
-        }),
-      }
-    );
+    // Try each key in order; rotate to the next ONLY on a rate-limit/overload
+    // (429/503). Any other status is a real error, so stop and report it.
+    let last = { status: 500, raw: "No Gemini keys configured" };
+    for (let i = 0; i < keys.length; i++) {
+      const upstream = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": keys[i] },
+          body,
+        }
+      );
+      const raw = await upstream.text();
+      if (upstream.ok) { last = { status: 200, raw }; break; }
+      last = { status: upstream.status, raw };
+      if (upstream.status !== 429 && upstream.status !== 503) break;
+    }
 
-    const raw = await upstream.text();
-
-    if (!upstream.ok) {
-      res.status(upstream.status).json({ error: "Upstream error", detail: raw.slice(0, 500) });
+    if (last.status !== 200) {
+      res.status(last.status).json({ error: "Upstream error", detail: last.raw.slice(0, 500) });
       return;
     }
 
     // Pull the text out of Gemini's response shape.
     let text = "";
     try {
-      const g = JSON.parse(raw);
+      const g = JSON.parse(last.raw);
       const parts = g?.candidates?.[0]?.content?.parts || [];
       text = parts.map((p) => p.text || "").join("");
     } catch (e) {
-      res.status(502).json({ error: "Could not read Gemini reply", detail: raw.slice(0, 300) });
+      res.status(502).json({ error: "Could not read Gemini reply", detail: last.raw.slice(0, 300) });
       return;
     }
 

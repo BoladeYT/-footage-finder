@@ -60,28 +60,112 @@ const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif
 /* ------------------------------------------------------------------ */
 /*  API HELPERS                                                        */
 /* ------------------------------------------------------------------ */
-// Calls our own relay (/api/keywords). The relay holds the AgentRouter key
-// server-side and forwards the request to AgentRouter's Anthropic-compatible
-// endpoint. The browser never sees the key.
-async function callClaude(prompt) {
-  const res = await fetch("/api/keywords", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt }),
+// Google Gemini's free tier allows only ~15 requests per minute. A long script
+// fires many keyword calls in a few seconds, which blows past that and comes
+// back as 429 "rate limited" — the cause of scenes showing the raw script line
+// instead of a real search. Two defences below keep every AI call reliable:
+//
+//   1) throttleGemini() — a shared gate that spaces our calls ~4.2s apart, so
+//      we stay just under the 15/minute ceiling instead of flooding it.
+//   2) callClaude()'s retry loop — if a call is rate-limited anyway (429) or the
+//      model is briefly overloaded (500/503), it waits and tries again a few
+//      times with growing pauses, instead of giving up and falling back to a
+//      raw script line.
+//
+// (The function is still named callClaude for historical reasons; the relay it
+// calls now talks to Google Gemini, not Claude. The browser never sees the key.)
+const GEMINI_MIN_GAP_MS = 4200; // 60000 / 4200 ≈ 14 calls per minute (< 15 cap)
+let _geminiChain = Promise.resolve();
+let _geminiLast = 0;
+function throttleGemini() {
+  // Serialise callers and enforce a minimum gap between each Gemini call. Each
+  // caller chains onto the previous one, so even concurrent calls line up.
+  _geminiChain = _geminiChain.then(async () => {
+    const wait = Math.max(0, _geminiLast + GEMINI_MIN_GAP_MS - Date.now());
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    _geminiLast = Date.now();
   });
-  if (!res.ok) throw new Error("Claude request failed (" + res.status + ")");
-  const data = await res.json();
-  return (data.content || [])
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("");
+  return _geminiChain;
 }
 
+async function callClaude(prompt) {
+  const MAX_RETRIES = 5;
+  for (let attempt = 0; ; attempt++) {
+    await throttleGemini();
+    const res = await fetch("/api/keywords", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return (data.content || [])
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("");
+    }
+    // 429 = rate limited, 500/503 = model briefly overloaded. These are
+    // temporary — wait (2s, 4s, 8s, ... capped at 30s) and try again rather
+    // than failing the scene. Any other status is a real error, so throw.
+    const temporary = res.status === 429 || res.status === 503 || res.status === 500;
+    if (temporary && attempt < MAX_RETRIES) {
+      const backoff = Math.min(30000, 2000 * Math.pow(2, attempt));
+      await new Promise((r) => setTimeout(r, backoff));
+      continue;
+    }
+    throw new Error("Claude request failed (" + res.status + ")");
+  }
+}
+
+// Fallback splitter (used only if the AI segmentation step fails): splits on
+// sentence-ending punctuation. Safe but coarse — a sentence with several actions
+// stays as one scene. segmentScript() below is the primary path.
 function splitIntoScenes(script) {
   const cleaned = script.replace(/\s+/g, " ").trim();
   const matches = cleaned.match(/[^.!?]+[.!?]+/g);
   if (!matches) return cleaned ? [cleaned] : [];
   return matches.map((s) => s.trim()).filter((s) => s.length > 1);
+}
+
+// Ask the AI to break the script into individual filmable "beats" — one visual
+// action per scene. This is a meaning task (knowing "kids climbed trees" is an
+// action but "A hundred years ago" is just a lead-in), so a human-written rule
+// can't do it well; the model can. Returns an array of short scene lines.
+async function segmentScript(script) {
+  const prompt =
+    `You are a video editor breaking a YouTube script into individual B-roll shots.\n` +
+    `Split the script into separate FILMABLE BEATS - one distinct visual per beat, IN THE ` +
+    `SCRIPT'S OWN WORDS.\n\n` +
+    `#1 RULE - DO NOT SUMMARIZE. Keep each beat's real wording and full meaning. Never ` +
+    `collapse a sentence into a short vague label:\n` +
+    `  BAD:  "The safest childhood in history might actually be making kids weaker"\n` +
+    `        -> "A safe childhood"   (WRONG: drops "making kids weaker" and flips the meaning)\n` +
+    `  GOOD: "The safest childhood in history might actually be making kids weaker"\n` +
+    `        -> ["The safest childhood in history might actually be making kids weaker"]  (kept whole)\n\n` +
+    `WHEN TO SPLIT - only when one sentence lists several DIFFERENT things a camera would film ` +
+    `separately (different actions, or distinct states). Keep each piece's real words; you may ` +
+    `carry the subject forward so a piece stands alone, but change nothing else:\n` +
+    `  "kids climbed trees, built forts, and disappeared outside for hours"\n` +
+    `    -> ["kids climbed trees", "kids built forts", "kids disappeared outside for hours"]\n` +
+    `  "the room they're in is warm, safe, well-lit"\n` +
+    `    -> ["a warm room", "a safe room", "a well-lit room"]\n` +
+    `  "whether it was sunny or cloudy, summer or winter"\n` +
+    `    -> ["a sunny day", "a cloudy day", "a summer scene", "a winter scene"]\n\n` +
+    `WHEN TO KEEP AS ONE - an abstract claim or single idea with no distinct sub-actions, and ` +
+    `commas that just describe the SAME thing, stay ONE beat in the script's own words:\n` +
+    `  "an ordinary, perfectly nice room" -> ["an ordinary, perfectly nice room"]  (still one room)\n` +
+    `  "a crisp point on the retina, the sheet of light-sensitive cells lining the back of it"\n` +
+    `    -> ["light landing in a crisp point on the retina"]  (the rest just defines the retina)\n\n` +
+    `MORE RULES:\n` +
+    `- Prefer the script's exact words. The ONLY edit allowed is carrying a subject forward into ` +
+    `a bare beat (e.g. "built forts" -> "kids built forts"). Never swap in different words that ` +
+    `change the meaning.\n` +
+    `- Fold pure lead-in fragments that aren't filmable alone (e.g. "A hundred years ago", ` +
+    `"Meanwhile", "On the other hand") into the beat they introduce, don't make them their own beat.\n` +
+    `- Preserve the script's order. Do NOT invent, summarize, or add anything not in the script.\n\n` +
+    `Return ONLY a JSON array of strings, in order. No commentary.\n\nScript:\n"""${script}"""`;
+  const arr = parseJSONArray(await callClaude(prompt));
+  return arr.map((s) => (s || "").toString().trim()).filter((s) => s.length > 1);
 }
 
 function parseJSONArray(text) {
@@ -154,12 +238,15 @@ async function oneKeyword(fullScript, line) {
   return t;
 }
 
-async function regenKeyword(line, prev) {
+async function regenKeyword(fullScript, line, prev) {
   const prompt =
-    `A YouTube script has this line: "${line}". ` +
+    `You are a senior YouTube video editor sourcing B-roll on Pexels/Pixabay.\n` +
+    `Full script for context only:\n"""${fullScript}"""\n\n` +
+    `One line from that script is: "${line}". ` +
     `The previous stock-footage search was "${prev}". ` +
     `Suggest ONE DIFFERENT, fresh Pexels/Pixabay search query that captures a different visual ` +
-    `angle on the same moment. Match this style: SUBJECT + visible action/expression + setting, ` +
+    `angle on the same moment. Use the surrounding script context to keep the subject and mood right. ` +
+    `Match this style: SUBJECT + visible action/expression + setting, ` +
     `plus a framing word when it fits (close-up, macro, wide, aerial, silhouette, timelapse). ` +
     `Usually 4 to 6 words, cinematic but always a real filmable shot (e.g. ` +
     `"child eye roll reluctant expression close-up"). No abstract phrases. ` +
@@ -169,9 +256,9 @@ async function regenKeyword(line, prev) {
 }
 
 /* ---- Pexels ---- */
-async function pexelsPhotos(q, key, page = 1, orientation = "landscape") {
+async function pexelsPhotos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   const r = await fetch(
-    `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=4&page=${page}&orientation=${orientation}`,
+    `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&orientation=${orientation}`,
     { headers: { Authorization: key } }
   );
   if (r.status === 401) throw new Error("PEXELS_AUTH");
@@ -188,9 +275,9 @@ async function pexelsPhotos(q, key, page = 1, orientation = "landscape") {
     label: `Pexels Photo #${p.id}`,
   }));
 }
-async function pexelsVideos(q, key, page = 1, orientation = "landscape") {
+async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   const r = await fetch(
-    `https://api.pexels.com/videos/search?query=${encodeURIComponent(q)}&per_page=4&page=${page}&orientation=${orientation}`,
+    `https://api.pexels.com/videos/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&orientation=${orientation}`,
     { headers: { Authorization: key } }
   );
   if (r.status === 401) throw new Error("PEXELS_AUTH");
@@ -215,11 +302,12 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape") {
 }
 
 /* ---- Pixabay ---- */
-async function pixabayPhotos(q, key, page = 1, orientation = "landscape") {
+async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   const pbOrient = orientation === "portrait" ? "vertical" : "horizontal";
   const r = await fetch(
-    `https://pixabay.com/api/?key=${key}&q=${encodeURIComponent(q)}&per_page=4&page=${page}&image_type=photo&orientation=${pbOrient}`
+    `https://pixabay.com/api/?key=${key}&q=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&image_type=photo&orientation=${pbOrient}`
   );
+  if (r.status === 429) throw new Error("PIXABAY_RATE");
   if (!r.ok) return [];
   const d = await r.json();
   return (d.hits || []).map((h) => ({
@@ -232,12 +320,14 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape") {
     label: `Pixabay Photo #${h.id}`,
   }));
 }
-async function pixabayVideos(q, key, page = 1, orientation = "landscape") {
+async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   // Pixabay's video endpoint has no orientation param, so we request a few
-  // extra and filter by the clip's own width/height on our side.
+  // extra (double the wanted count) and filter by the clip's own width/height
+  // on our side, then trim back to perPage.
   const r = await fetch(
-    `https://pixabay.com/api/videos/?key=${key}&q=${encodeURIComponent(q)}&per_page=8&page=${page}`
+    `https://pixabay.com/api/videos/?key=${key}&q=${encodeURIComponent(q)}&per_page=${perPage * 2}&page=${page}`
   );
+  if (r.status === 429) throw new Error("PIXABAY_RATE");
   if (!r.ok) return [];
   const d = await r.json();
   const wantPortrait = orientation === "portrait";
@@ -263,7 +353,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape") {
       };
     })
     .filter((r) => r._portrait === wantPortrait)
-    .slice(0, 4)
+    .slice(0, perPage)
     .map(({ _portrait, ...r }) => r);
 }
 
@@ -279,17 +369,35 @@ function broadenQueries(q) {
   return out;
 }
 
+// Try each API key in turn, rotating to the next ONLY when the current one is
+// rate-limited (its hourly/per-minute quota is used up). Giving each source a
+// 2nd and 3rd key from separate free accounts multiplies the usable quota, so
+// long scripts and heavy reshuffling don't run dry. A non-rate error (e.g. a
+// rejected key) is thrown straight away — rotating wouldn't help there.
+async function withKeyRotation(keys, rateSignal, fn) {
+  const list = (keys || []).filter(Boolean);
+  for (let i = 0; i < list.length; i++) {
+    try {
+      return await fn(list[i]);
+    } catch (e) {
+      if (e && e.message === rateSignal && i < list.length - 1) continue;
+      throw e;
+    }
+  }
+  return [];
+}
+
 async function searchScene(q, opts) {
-  const { pexelsKey, pixabayKey, sources, mediaTypes, page, orientation = "landscape" } = opts;
+  const { pexelsKeys = [], pixabayKeys = [], sources, mediaTypes, page, orientation = "landscape", perPage = 4 } = opts;
   const runOne = async (query) => {
     const tasks = [];
-    if (sources.pexels && pexelsKey) {
-      if (mediaTypes.videos) tasks.push(pexelsVideos(query, pexelsKey, page, orientation));
-      if (mediaTypes.photos) tasks.push(pexelsPhotos(query, pexelsKey, page, orientation));
+    if (sources.pexels && pexelsKeys.length) {
+      if (mediaTypes.videos) tasks.push(withKeyRotation(pexelsKeys, "PEXELS_RATE", (k) => pexelsVideos(query, k, page, orientation, perPage)));
+      if (mediaTypes.photos) tasks.push(withKeyRotation(pexelsKeys, "PEXELS_RATE", (k) => pexelsPhotos(query, k, page, orientation, perPage)));
     }
-    if (sources.pixabay && pixabayKey) {
-      if (mediaTypes.videos) tasks.push(pixabayVideos(query, pixabayKey, page, orientation));
-      if (mediaTypes.photos) tasks.push(pixabayPhotos(query, pixabayKey, page, orientation));
+    if (sources.pixabay && pixabayKeys.length) {
+      if (mediaTypes.videos) tasks.push(withKeyRotation(pixabayKeys, "PIXABAY_RATE", (k) => pixabayVideos(query, k, page, orientation, perPage)));
+      if (mediaTypes.photos) tasks.push(withKeyRotation(pixabayKeys, "PIXABAY_RATE", (k) => pixabayPhotos(query, k, page, orientation, perPage)));
     }
     const settled = await Promise.allSettled(tasks);
     let rateLimited = false;
@@ -321,7 +429,14 @@ async function searchScene(q, opts) {
   return results;
 }
 
-async function downloadMedia(item) {
+async function downloadMedia(item, seq, total) {
+  // Prefix the file with the zero-padded scene number (01_, 02_, ...) so that
+  // when the creator imports everything into an editor, the files sort in
+  // script/timeline order. Pad width follows the scene count (min 2 digits) so
+  // 100+ scene scripts still sort correctly. The stock id stays in the name so
+  // two clips from the SAME scene don't overwrite each other.
+  const pad = Math.max(2, String(total || 0).length);
+  const prefix = seq ? String(seq).padStart(pad, "0") + "_" : "";
   try {
     const res = await fetch(item.download);
     if (!res.ok) throw new Error("bad");
@@ -329,7 +444,7 @@ async function downloadMedia(item) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${item.label.replace(/[^a-z0-9]+/gi, "_")}.${item.type === "video" ? "mp4" : "jpg"}`;
+    a.download = `${prefix}${item.label.replace(/[^a-z0-9]+/gi, "_")}.${item.type === "video" ? "mp4" : "jpg"}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -417,10 +532,15 @@ function FootageFinder() {
   const [toolName, setToolName] = useState("Footage Finder");
   const [creator, setCreator] = useState("");
   const [pexelsKey, setPexelsKey] = useState("");
+  const [pexelsKey2, setPexelsKey2] = useState("");
+  const [pexelsKey3, setPexelsKey3] = useState("");
   const [pixabayKey, setPixabayKey] = useState("");
+  const [pixabayKey2, setPixabayKey2] = useState("");
+  const [pixabayKey3, setPixabayKey3] = useState("");
   const [mediaTypes, setMediaTypes] = useState({ videos: true, photos: true });
   const [sources, setSources] = useState({ pexels: true, pixabay: false });
   const [orientation, setOrientation] = useState("landscape"); // landscape | portrait
+  const [perScene, setPerScene] = useState(4); // clips fetched & shown per scene: 2 or 4
 
   // theme (light | dark) — persisted separately so it applies before settings load
   const [theme, setTheme] = useState(() => {
@@ -456,10 +576,15 @@ function FootageFinder() {
         setToolName(s.toolName || "Footage Finder");
         setCreator(s.creator || "");
         setPexelsKey(s.pexelsKey || "");
+        setPexelsKey2(s.pexelsKey2 || "");
+        setPexelsKey3(s.pexelsKey3 || "");
         setPixabayKey(s.pixabayKey || "");
+        setPixabayKey2(s.pixabayKey2 || "");
+        setPixabayKey3(s.pixabayKey3 || "");
         setMediaTypes(s.mediaTypes || { videos: true, photos: true });
         setSources(s.sources || { pexels: true, pixabay: false });
         setOrientation(s.orientation === "portrait" ? "portrait" : "landscape");
+        setPerScene(s.perScene === 2 ? 2 : 4);
         setStage("app");
         setReturning(true);
         setStatus("Welcome back. Paste a new script and hit Analyse.");
@@ -469,7 +594,13 @@ function FootageFinder() {
   }, []);
 
   const saveAll = (extra = {}) =>
-    persist({ toolName, creator, pexelsKey, pixabayKey, mediaTypes, sources, orientation, ...extra });
+    persist({ toolName, creator, pexelsKey, pexelsKey2, pexelsKey3, pixabayKey, pixabayKey2, pixabayKey3, mediaTypes, sources, orientation, perScene, ...extra });
+
+  // The key lists handed to searchScene: primary first, then any backups, empty
+  // ones filtered out. withKeyRotation() falls to the next only on a rate limit,
+  // so 2-3 keys from separate free accounts multiply the usable quota.
+  const pexelsKeys = [pexelsKey, pexelsKey2, pexelsKey3].map((k) => k.trim()).filter(Boolean);
+  const pixabayKeys = [pixabayKey, pixabayKey2, pixabayKey3].map((k) => k.trim()).filter(Boolean);
 
   /* stats */
   const stats = useMemo(() => {
@@ -493,7 +624,7 @@ function FootageFinder() {
       setStatusErr(true);
       return;
     }
-    if (!(sources.pexels && pexelsKey) && !(sources.pixabay && pixabayKey)) {
+    if (!(sources.pexels && pexelsKeys.length) && !(sources.pixabay && pixabayKeys.length)) {
       setStatus("Connect an active source (Pexels or Pixabay) in Settings first.");
       setStatusErr(true);
       return;
@@ -503,14 +634,23 @@ function FootageFinder() {
     setScenes([]);
     setSelected({});
     try {
-      const lines = splitIntoScenes(script);
+      // Break the script into filmable beats via the AI (one action per scene).
+      // Fall back to the coarse sentence splitter if that step fails for any reason.
+      setProgress({ pct: 4, label: "Breaking your script into scenes..." });
+      let lines;
+      try {
+        lines = await segmentScript(script);
+        if (!lines || lines.length === 0) lines = splitIntoScenes(script);
+      } catch {
+        lines = splitIntoScenes(script);
+      }
       // phase 1 — keywords in batches (full context)
       const size = 5;
       const batches = [];
       for (let i = 0; i < lines.length; i += size) batches.push(lines.slice(i, i + size));
       let keywords = [];
       for (let b = 0; b < batches.length; b++) {
-        setProgress({ pct: ((b) / batches.length) * 35, label: `Claude analysing batch ${b + 1}/${batches.length} with full context...` });
+        setProgress({ pct: ((b) / batches.length) * 35, label: `Analysing batch ${b + 1}/${batches.length} with full context...` });
         keywords = keywords.concat(await generateKeywords(script, batches[b]));
       }
       // phase 2 — search each scene
@@ -521,12 +661,12 @@ function FootageFinder() {
         setProgress({ pct: 35 + ((i + 1) / lines.length) * 65, label: `Scene ${i + 1}/${lines.length} → "${kw}"` });
         let results = [];
         try {
-          results = await searchScene(kw, { pexelsKey, pixabayKey, sources, mediaTypes, orientation, page: 1 });
+          results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation, perPage: perScene, page: 1 });
         } catch (err) {
           if (err.message === "PEXELS_RATE") rateHit = true; // keep going, just no results for this scene
           else throw err; // real errors (auth, Claude) still abort
         }
-        acc.push({ id: "sc-" + i, line: lines[i], keyword: kw, page: 1, results, orientation });
+        acc.push({ id: "sc-" + i, line: lines[i], keyword: kw, page: 1, results, orientation, perScene });
         setScenes([...acc]);
       }
       const total = acc.reduce((n, s) => n + s.results.length, 0);
@@ -539,7 +679,7 @@ function FootageFinder() {
       }
     } catch (e) {
       if (e.message === "PEXELS_AUTH") setStatus("Your Pexels API key was rejected. Open Settings and check it.");
-      else if (e.message?.includes("Claude")) setStatus("Couldn't reach Claude. Make sure you're running this inside Claude.");
+      else if (e.message?.includes("Claude")) setStatus("The AI keyword step is being rate-limited by Google. Wait a minute and try again.");
       else setStatus("Something went wrong while analysing. Try again.");
       setStatusErr(true);
     } finally {
@@ -564,7 +704,7 @@ function FootageFinder() {
     setBusy(s.id, true);
     try {
       const page = (s.page || 1) + 1;
-      const results = await searchScene(s.keyword, { pexelsKey, pixabayKey, sources, mediaTypes, orientation: s.orientation || orientation, page });
+      const results = await searchScene(s.keyword, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page });
       updateScene(s.id, { results: results.length ? results : s.results, page });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
@@ -572,8 +712,8 @@ function FootageFinder() {
   async function regenScene(s) {
     setBusy(s.id, true);
     try {
-      const kw = await regenKeyword(s.line, s.keyword);
-      const results = await searchScene(kw, { pexelsKey, pixabayKey, sources, mediaTypes, orientation: s.orientation || orientation, page: 1 });
+      const kw = await regenKeyword(script, s.line, s.keyword);
+      const results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page: 1 });
       updateScene(s.id, { keyword: kw, results, page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
@@ -583,7 +723,7 @@ function FootageFinder() {
     if (!kw.trim() || kw === s.keyword) return;
     setBusy(s.id, true);
     try {
-      const results = await searchScene(kw, { pexelsKey, pixabayKey, sources, mediaTypes, orientation: s.orientation || orientation, page: 1 });
+      const results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page: 1 });
       updateScene(s.id, { keyword: kw, results, page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
@@ -595,7 +735,7 @@ function FootageFinder() {
     updateScene(s.id, { orientation: next }); // reshape tiles immediately
     setBusy(s.id, true);
     try {
-      const results = await searchScene(s.keyword, { pexelsKey, pixabayKey, sources, mediaTypes, orientation: next, page: 1 });
+      const results = await searchScene(s.keyword, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: next, perPage: s.perScene || perScene, page: 1 });
       updateScene(s.id, { results: results.length ? results : s.results, page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
@@ -618,8 +758,12 @@ function FootageFinder() {
 
   async function downloadAll() {
     const items = Object.values(selected);
+    // Map every result id to its scene number (1-based) so each downloaded file
+    // is prefixed with the scene it belongs to and imports in timeline order.
+    const sceneOf = {};
+    scenes.forEach((s, i) => s.results.forEach((r) => { sceneOf[r.id] = i + 1; }));
     for (const it of items) {
-      await downloadMedia(it);
+      await downloadMedia(it, sceneOf[it.id], scenes.length);
       await new Promise((r) => setTimeout(r, 600));
     }
   }
@@ -646,7 +790,7 @@ function FootageFinder() {
   /* ---------------------------------------------------------------- */
   if (!booted)
     return (
-      <div style={{ backgroundColor: C.paper, minHeight: 520 }} className="w-full flex items-center justify-center">
+      <div style={{ backgroundColor: C.paper, minHeight: "100vh" }} className="w-full flex items-center justify-center">
         <Loader2 className="animate-spin" style={{ color: C.brown }} size={26} />
       </div>
     );
@@ -654,19 +798,25 @@ function FootageFinder() {
   if (stage === "wizard")
     return (
       <Wizard
-        initial={{ toolName, creator, pexelsKey, pixabayKey }}
+        initial={{ toolName, creator, pexelsKey, pexelsKey2, pexelsKey3, pixabayKey, pixabayKey2, pixabayKey3 }}
         theme={theme}
         onToggleTheme={toggleTheme}
         onDone={(d) => {
           setToolName(d.toolName);
           setCreator(d.creator);
           setPexelsKey(d.pexelsKey);
+          setPexelsKey2(d.pexelsKey2);
+          setPexelsKey3(d.pexelsKey3);
           setPixabayKey(d.pixabayKey);
+          setPixabayKey2(d.pixabayKey2);
+          setPixabayKey3(d.pixabayKey3);
           const nextSources = { pexels: !!d.pexelsKey, pixabay: !!d.pixabayKey };
           setSources(nextSources);
           persist({
-            toolName: d.toolName, creator: d.creator, pexelsKey: d.pexelsKey,
-            pixabayKey: d.pixabayKey, mediaTypes,
+            toolName: d.toolName, creator: d.creator,
+            pexelsKey: d.pexelsKey, pexelsKey2: d.pexelsKey2, pexelsKey3: d.pexelsKey3,
+            pixabayKey: d.pixabayKey, pixabayKey2: d.pixabayKey2, pixabayKey3: d.pixabayKey3,
+            mediaTypes,
             sources: nextSources,
           });
           setStage("app");
@@ -677,7 +827,7 @@ function FootageFinder() {
 
   /* ------------------------------- APP ---------------------------- */
   return (
-    <div style={{ backgroundColor: C.paper, ...sans }} className="w-full">
+    <div style={{ backgroundColor: C.paper, ...sans, minHeight: "100vh" }} className="w-full">
       <style>{`
         .ff-card{background:${C.card};border:1px solid ${C.line};}
         .ff-tile img{transition:transform .35s ease;}
@@ -776,6 +926,13 @@ function FootageFinder() {
                 <Toggle icon={Smartphone} active={orientation === "portrait"} onClick={() => { setOrientation("portrait"); saveAll({ orientation: "portrait" }); }}>Portrait</Toggle>
               </div>
             </div>
+            <div>
+              <Label>Clips / scene</Label>
+              <div className="flex gap-2">
+                <Toggle active={perScene === 2} onClick={() => { setPerScene(2); saveAll({ perScene: 2 }); }}>2</Toggle>
+                <Toggle active={perScene === 4} onClick={() => { setPerScene(4); saveAll({ perScene: 4 }); }}>4</Toggle>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -854,11 +1011,16 @@ function FootageFinder() {
                           <button
                             onClick={() => { setEditing(s.id); setEditVal(s.keyword); }}
                             style={{ ...mono, color: C.inkSoft }}
-                            className="text-[11px] inline-flex items-center gap-1 group"
-                            title="Click to edit search"
+                            className="text-[11px] inline-flex items-center gap-1.5 group"
+                            title="Click to edit this search"
                           >
                             "{s.keyword}"
-                            <Pencil size={10} style={{ color: C.muted }} className="opacity-0 group-hover:opacity-100" />
+                            <span
+                              style={{ color: C.brown, border: `1px solid ${C.line}`, backgroundColor: C.card }}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide group-hover:opacity-80"
+                            >
+                              <Pencil size={9} /> edit
+                            </span>
                           </button>
                         )}
                       </div>
@@ -886,7 +1048,7 @@ function FootageFinder() {
                   {s.results.length === 0 ? (
                     <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">No results — try Shuffle or Regenerate.</div>
                   ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className={`grid gap-2 ${(s.perScene || perScene) === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
                       {s.results.map((r) => {
                         const sel = !!selected[r.id];
                         return (
@@ -957,11 +1119,11 @@ function FootageFinder() {
                                 <div style={{ ...mono }} className="text-[8px] text-white/85 mb-1 truncate">{r.label}</div>
                                 <div className="flex items-center gap-1.5">
                                   {r.type === "video" && r.preview && (
-                                    <button onClick={(e) => { e.stopPropagation(); setPlaying(r); }} title="Play full preview with sound" style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                    <button onClick={(e) => { e.stopPropagation(); setPlaying({ ...r, _seq: i + 1, _total: scenes.length }); }} title="Play full preview with sound" style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
                                       <Play size={9} /> Sound
                                     </button>
                                   )}
-                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r); }} style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length); }} style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
                                     <Download size={9} /> Save
                                   </button>
                                   <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
@@ -1021,7 +1183,7 @@ function FootageFinder() {
             <div className="flex items-center justify-between mt-3">
               <span style={{ ...mono, color: "#f4ead7" }} className="text-[11px]">{playing.label}</span>
               <div className="flex gap-2">
-                <button onClick={() => downloadMedia(playing)} style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Save</button>
+                <button onClick={() => downloadMedia(playing, playing._seq, playing._total)} style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Save</button>
                 <button onClick={() => window.open(playing.url, "_blank")} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
                 <button onClick={() => setPlaying(null)} style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
               </div>
@@ -1041,7 +1203,11 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
   const [toolName, setToolName] = useState(initial.toolName || "");
   const [creator, setCreator] = useState(initial.creator || "");
   const [pexelsKey, setPexelsKey] = useState(initial.pexelsKey || "");
+  const [pexelsKey2, setPexelsKey2] = useState(initial.pexelsKey2 || "");
+  const [pexelsKey3, setPexelsKey3] = useState(initial.pexelsKey3 || "");
   const [pixabayKey, setPixabayKey] = useState(initial.pixabayKey || "");
+  const [pixabayKey2, setPixabayKey2] = useState(initial.pixabayKey2 || "");
+  const [pixabayKey3, setPixabayKey3] = useState(initial.pixabayKey3 || "");
   const [pxState, setPxState] = useState("idle"); // idle|checking|ok|bad
   const [pbState, setPbState] = useState("idle");
 
@@ -1067,7 +1233,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
     s === "bad" ? <X size={15} style={{ color: "#a14b3a" }} /> : null;
 
   return (
-    <div style={{ backgroundColor: C.paper, ...sans, minHeight: 540 }} className="w-full">
+    <div style={{ backgroundColor: C.paper, ...sans, minHeight: "100vh" }} className="w-full">
       <div className="max-w-xl mx-auto px-6 py-10">
         {/* brand */}
         <div className="flex items-center justify-between mb-1">
@@ -1138,6 +1304,9 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               <a href="https://www.pexels.com/api/new/" target="_blank" rel="noreferrer" style={{ color: C.brown }} className="text-[11px] underline">Get a free key at pexels.com/api →</a>
               <input value={pexelsKey} onChange={(e) => { setPexelsKey(e.target.value); setPxState("idle"); }} onBlur={checkPx} placeholder="Paste your Pexels key" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mt-2" />
               {pxState === "bad" && <div style={{ color: "#a14b3a", ...mono }} className="text-[10px] mt-1.5">That key didn't work. Check it and try again.</div>}
+              <div style={{ color: C.muted, ...mono }} className="text-[10px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional) — add a 2nd/3rd key from <span style={{ color: C.inkSoft }}>separate free Pexels accounts</span> to triple your hourly limit. Used automatically only when the main key is maxed out.</div>
+              <input value={pexelsKey2} onChange={(e) => setPexelsKey2(e.target.value)} placeholder="Backup Pexels key #2 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700 mb-1.5" />
+              <input value={pexelsKey3} onChange={(e) => setPexelsKey3(e.target.value)} placeholder="Backup Pexels key #3 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700" />
             </div>
 
             <div style={card} className="rounded-lg p-4">
@@ -1147,6 +1316,9 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               </div>
               <a href="https://pixabay.com/api/docs/" target="_blank" rel="noreferrer" style={{ color: C.brown }} className="text-[11px] underline">Get a free key at pixabay.com/api →</a>
               <input value={pixabayKey} onChange={(e) => { setPixabayKey(e.target.value); setPbState("idle"); }} onBlur={checkPb} placeholder="Paste your Pixabay key (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mt-2" />
+              <div style={{ color: C.muted, ...mono }} className="text-[10px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional) — 2nd/3rd key from <span style={{ color: C.inkSoft }}>separate free Pixabay accounts</span>, used automatically when the main one is maxed out.</div>
+              <input value={pixabayKey2} onChange={(e) => setPixabayKey2(e.target.value)} placeholder="Backup Pixabay key #2 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700 mb-1.5" />
+              <input value={pixabayKey3} onChange={(e) => setPixabayKey3(e.target.value)} placeholder="Backup Pixabay key #3 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700" />
             </div>
 
             <div className="flex gap-2 mt-7">
@@ -1167,7 +1339,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">You're all set</h2>
             <p style={{ color: C.inkSoft }} className="text-sm mb-1"><span className="font-semibold">{toolName || "Your tool"}</span> is ready to go.</p>
             <p style={{ color: C.muted, ...mono }} className="text-[11px] mb-7">Tip: bookmark your tool's link so you can reopen it anytime without re-pasting anything.</p>
-            <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pixabayKey: pixabayKey.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...mono, letterSpacing: "0.1em" }} className="w-full py-3.5 rounded-md text-[13px] font-semibold uppercase">Open my tool</button>
+            <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pexelsKey2: pexelsKey2.trim(), pexelsKey3: pexelsKey3.trim(), pixabayKey: pixabayKey.trim(), pixabayKey2: pixabayKey2.trim(), pixabayKey3: pixabayKey3.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...mono, letterSpacing: "0.1em" }} className="w-full py-3.5 rounded-md text-[13px] font-semibold uppercase">Open my tool</button>
           </div>
         )}
       </div>
