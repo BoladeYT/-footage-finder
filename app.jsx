@@ -413,14 +413,14 @@ async function searchScene(q, opts) {
         rateLimited = true;
     }
     const flat = settled.filter((s) => s.status === "fulfilled").flatMap((s) => s.value);
-    // "Clips / scene" (perPage) means N videos AND N photos — BALANCED. With both
-    // Pexels and Pixabay on, each source returns its own perPage, so a type can
-    // arrive as up to 2×perPage; we cap EACH type to perPage independently. This
-    // is what stops the "4 videos but only 2 images" lopsidedness: videos and
-    // photos are trimmed to the same target, so a mixed pick is always even.
-    const vids = flat.filter((r) => r.type === "video").slice(0, perPage);
-    const phts = flat.filter((r) => r.type === "photo").slice(0, perPage);
-    // Interleave so the grid alternates video/photo instead of all-videos-first.
+    // "Clips / scene" (perPage) is applied PER SOURCE, PER MEDIA TYPE. Each API
+    // call already asked for perPage, so with both Pexels AND Pixabay on you get
+    // perPage videos from each (up to 2×perPage videos) AND perPage photos from
+    // each. We keep them all — no cross-source cap. If one type comes back short,
+    // that source simply had fewer real matches for the query (not a bug). We
+    // interleave video/photo so the grid alternates instead of all-videos-first.
+    const vids = flat.filter((r) => r.type === "video");
+    const phts = flat.filter((r) => r.type === "photo");
     const out = [];
     for (let i = 0; i < Math.max(vids.length, phts.length); i++) {
       if (i < vids.length) out.push(vids[i]);
