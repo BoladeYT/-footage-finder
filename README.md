@@ -1,4 +1,90 @@
-# Footage Finder — how to put it online
+# Footage Finder — set up your private copy
+
+Follow these steps once. Takes about 5 minutes. No coding.
+
+---
+
+### Step 1 — Get your free Gemini key
+
+1. Go to **aistudio.google.com/apikey**
+2. Sign in with any Google account
+3. Click **Create API key** → **Copy** it
+
+Free, no card. Keep it copied — you'll paste it in Step 3.
+
+---
+
+### Step 2 — Click the Deploy button
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FBoladeYT%2F-footage-finder&env=GEMINI_KEY&envDescription=Your%20free%20Google%20Gemini%20key%20(get%20one%20at%20the%20link)&envLink=https%3A%2F%2Faistudio.google.com%2Fapikey&project-name=footage-finder&repository-name=footage-finder)
+
+- Sign up for a **free Vercel account** (use "Continue with GitHub" or your email)
+- If it asks to connect GitHub, click **Authorize** — this just copies the tool to you
+
+---
+
+### Step 3 — Paste your key and deploy
+
+1. A box appears asking for **GEMINI_KEY**
+2. Paste the key you copied in Step 1 into the **Value** box
+3. Click **Deploy** and wait about a minute
+
+---
+
+### Step 4 — Open your tool
+
+1. When you see **"Congratulations!"**, your tool is ready
+2. Click **Continue to Dashboard**, then click **Visit** (or **Domains**) to open your link
+3. **Bookmark that link — it's your tool, forever**
+
+On first open, it asks for your Pexels (required) and Pixabay (optional) keys.
+Get those free at **pexels.com/api** and **pixabay.com/api/docs**.
+
+> **You can ignore everything else** Vercel shows you — "Install Coding Agent
+> Plugin", "Add Domain", "Enable Analytics", the checklist. None of it is needed.
+> Your tool already works.
+
+---
+
+## Questions people ask
+
+**Is this really mine to keep?**
+Yes. When you set it up, you get your own private copy. It's yours forever — no
+monthly fee, nobody else uses it, and it won't disappear.
+
+**Do I need to pay for anything?**
+No. Everything runs on free accounts (Google, Pexels, Pixabay). You only make
+free keys — no card needed.
+
+**Is one Google (Gemini) key enough?**
+Yes. One key is plenty for normal use. If you run a very long script or use it a
+lot in one hour, it might slow down for a bit — that's the free limit, not a
+fault. Wait about an hour and it's back. (Power users can add extra keys later,
+but most people never need to.)
+
+**Will it stop showing me raw sentences instead of good search words?**
+No, that's fixed. The tool now waits its turn and retries by itself, so it always
+gives you proper footage search words, not just your script text.
+
+**Does it work for my type of videos?**
+It reads any script — money, history, motivation, health, tech, faith, anything —
+and finds matching footage. It works best for broad, everyday topics (lifestyle,
+motivation, business, nature, faceless value videos) because free footage sites
+have lots of that. Very specific things (a named person, one exact product) may
+only get close matches, because the free footage sites simply don't have those.
+
+**If the tool gets updated later, does my copy update too?**
+No. Your copy is yours and stays exactly as it is — it won't change on its own or
+break. If a new version comes out, you'd set it up fresh to get it.
+
+**Footage stopped loading. Is it broken?**
+Probably not. The free footage sites allow a certain number of searches per hour.
+A long script or lots of use can reach that. Wait about an hour, or add backup
+keys in Settings. Everything you already found stays.
+
+---
+
+## The long way (only if the button doesn't work)
 
 No coding. No installing. It all happens in your web browser.
 Takes about 15 minutes, once.
