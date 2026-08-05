@@ -5,7 +5,7 @@ const {
   Play, Download, ExternalLink, Shuffle, RefreshCw, Check, X,
   Film, Image: ImageIcon, Sparkles, KeyRound, ArrowRight,
   Loader2, FileText, Settings, Pencil, CheckCircle2, Circle, Trash2,
-  Sun, Moon, Monitor, Smartphone,
+  Sun, Moon, Monitor, Smartphone, Package, Info, AlertTriangle,
 } = lucideReact;
 
 /* ------------------------------------------------------------------ */
@@ -446,27 +446,65 @@ async function searchScene(q, opts) {
   return results;
 }
 
-async function downloadMedia(item, seq, total) {
-  // Prefix the file with the zero-padded scene number (01_, 02_, ...) so that
-  // when the creator imports everything into an editor, the files sort in
-  // script/timeline order. Pad width follows the scene count (min 2 digits) so
-  // 100+ scene scripts still sort correctly. The stock id stays in the name so
-  // two clips from the SAME scene don't overwrite each other.
+// Pixabay's CDN doesn't send the CORS header a browser needs to READ a file's
+// bytes (only to display it), so a direct fetch of a Pixabay clip is blocked —
+// which breaks zipping. We route those through our own /api/proxy, which refetches
+// the file server-side and adds the header. Pexels sends the header, so it's read
+// directly (faster, no server hop).
+function clipNeedsProxy(url) {
+  const host = (url || "").replace(/^https?:\/\//, "").split("/")[0].toLowerCase();
+  return /(^|\.)pixabay\.com$/.test(host);
+}
+function clipFetchURL(url) {
+  return clipNeedsProxy(url) ? `/api/proxy?url=${encodeURIComponent(url)}` : url;
+}
+async function fetchClipBlob(item) {
+  const res = await fetch(clipFetchURL(item.download));
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.blob();
+}
+
+// The tiny in-browser zip library, loaded on demand from a CDN the first time
+// someone hits "Download ZIP" (kept out of the initial page load).
+let _jszipPromise;
+function loadJSZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip);
+  if (!_jszipPromise) {
+    _jszipPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js";
+      s.onload = () => resolve(window.JSZip);
+      s.onerror = () => reject(new Error("zip-load-failed"));
+      document.head.appendChild(s);
+    });
+  }
+  return _jszipPromise;
+}
+
+// Build the ordered, editor-friendly filename for a clip: zero-padded scene
+// number (01_, 02_, ...) so it sorts in timeline order, plus the clip's own id
+// so two clips from the SAME scene never overwrite each other.
+function clipFileName(item, seq, total) {
   const pad = Math.max(2, String(total || 0).length);
   const prefix = seq ? String(seq).padStart(pad, "0") + "_" : "";
+  const base = (item.label || "clip").replace(/[^a-z0-9]+/gi, "_");
+  return `${prefix}${base}.${item.type === "video" ? "mp4" : "jpg"}`;
+}
+
+async function downloadMedia(item, seq, total) {
+  const name = clipFileName(item, seq, total);
   try {
-    const res = await fetch(item.download);
-    if (!res.ok) throw new Error("bad");
-    const blob = await res.blob();
+    const blob = await fetchClipBlob(item);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${prefix}${item.label.replace(/[^a-z0-9]+/gi, "_")}.${item.type === "video" ? "mp4" : "jpg"}`;
+    a.download = name;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   } catch {
+    // Last resort — open the file in a new tab so the user can still save it by hand.
     window.open(item.download, "_blank");
   }
 }
@@ -580,6 +618,8 @@ function FootageFinder() {
   const [statusErr, setStatusErr] = useState(false);
   const [scenes, setScenes] = useState([]);
   const [selected, setSelected] = useState({});
+  const [zipping, setZipping] = useState(null); // null when idle, else {done,total,packing}
+  const [dismissWarn, setDismissWarn] = useState(false); // long-script heads-up dismissed?
   const [sceneBusy, setSceneBusy] = useState({});
   const [editing, setEditing] = useState(null);
   const [editVal, setEditVal] = useState("");
@@ -786,6 +826,61 @@ function FootageFinder() {
       await new Promise((r) => setTimeout(r, 600));
     }
   }
+
+  // Bundle every selected clip into ONE .zip (numbered so they import in order).
+  // Fetches each file's bytes (Pexels direct, Pixabay via the proxy), skipping any
+  // that fail rather than aborting the whole batch, and reports how many made it.
+  async function downloadZip() {
+    const items = Object.values(selected);
+    if (!items.length) return;
+    const sceneOf = {};
+    scenes.forEach((s, i) => s.results.forEach((r) => { sceneOf[r.id] = i + 1; }));
+    setZipping({ done: 0, total: items.length });
+    try {
+      const JSZip = await loadJSZip();
+      const zip = new JSZip();
+      const used = {};
+      let ok = 0, failed = 0;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        try {
+          const blob = await fetchClipBlob(it);
+          let name = clipFileName(it, sceneOf[it.id], scenes.length);
+          // Guard against two clips resolving to the same filename inside the zip.
+          if (used[name]) name = name.replace(/(\.[a-z0-9]+)$/i, `_${String(it.id).replace(/[^a-z0-9]+/gi, "")}$1`);
+          used[name] = 1;
+          zip.file(name, blob);
+          ok++;
+        } catch { failed++; }
+        setZipping({ done: i + 1, total: items.length });
+      }
+      if (!ok) {
+        setStatus("Couldn't fetch any of the selected clips to zip — check your connection, or use Files to save them one by one.");
+        setStatusErr(true);
+        return;
+      }
+      const out = await zip.generateAsync({ type: "blob" }, (meta) => {
+        setZipping({ done: items.length, total: items.length, packing: Math.round(meta.percent) });
+      });
+      const url = URL.createObjectURL(out);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(toolName || "footage").replace(/[^a-z0-9]+/gi, "_")}_clips.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      setStatus(failed
+        ? `Zipped ${ok} clip${ok > 1 ? "s" : ""}. ${failed} couldn't be fetched and were skipped — grab those with Files.`
+        : `Zipped ${ok} clip${ok > 1 ? "s" : ""} into one file. ✓`);
+      setStatusErr(false);
+    } catch {
+      setStatus("The zip helper couldn't load. Your clips are safe — use Files to save them individually.");
+      setStatusErr(true);
+    } finally {
+      setZipping(null);
+    }
+  }
   function exportShotList() {
     const rows = [`${toolName} — Shot List`, "=".repeat(44), ""];
     scenes.forEach((s, i) => {
@@ -910,7 +1005,7 @@ function FootageFinder() {
           </div>
           <textarea
             value={script}
-            onChange={(e) => setScript(e.target.value)}
+            onChange={(e) => { setScript(e.target.value); if (!e.target.value.trim()) setDismissWarn(false); }}
             placeholder="Paste your YouTube script here. Each sentence is read in context — Claude understands the scene before and after each line to find footage that fits the exact moment, not just the words..."
             style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, color: C.ink, ...sans }}
             className="w-full h-44 rounded-lg p-4 text-[14px] leading-relaxed resize-y outline-none focus:border-amber-700"
@@ -953,7 +1048,44 @@ function FootageFinder() {
               </div>
             </div>
           </div>
+
+          {/* Heads-up shown ONLY when 4 clips/scene is picked. Honest framing: clip
+              count does NOT affect the hourly limit (that counts searches = scenes),
+              it just doubles how much footage each scene loads + how big the ZIP is. */}
+          {perScene === 4 && (
+            <div style={{ ...mono, color: C.muted }} className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed">
+              <Info size={12} className="mt-[1px] flex-shrink-0" />
+              <span>
+                4 clips per scene loads twice as much footage. You get more to choose from, but
+                each scene loads slower and ZIP downloads are bigger. Pick 2 for faster, lighter runs.
+              </span>
+            </div>
+          )}
         </div>
+
+        {/* Long-script heads-up: appears ONLY when the pasted script is big enough
+            to risk the hourly limit (rough sentence count — the real quota driver
+            is number of scenes, NOT the clips-per-scene setting). Dismissible. */}
+        {(() => {
+          const sentences = (script.match(/[^.!?]+[.!?]+/g) || []).length;
+          if (sentences < 60 || dismissWarn || analyzing) return null;
+          return (
+            <div style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, borderLeft: "3px solid #b8862b" }} className="mt-6 rounded-md px-4 py-3 flex items-start gap-2.5">
+              <AlertTriangle size={15} style={{ color: "#b8862b" }} className="mt-[1px] flex-shrink-0" />
+              <div className="flex-1">
+                <div style={{ ...mono, color: C.ink }} className="text-[11.5px] font-semibold">
+                  Heads-up: this is a long script (~{sentences} scenes)
+                </div>
+                <div style={{ ...mono, color: C.muted }} className="text-[10.5px] leading-relaxed mt-1">
+                  Longer scripts make more searches and can hit the free hourly limit near the end —
+                  that's expected, not a bug. If footage stops partway, wait about an hour, or add backup
+                  keys in Settings. Splitting a very long script into parts also helps.
+                </div>
+              </div>
+              <button onClick={() => setDismissWarn(true)} style={{ ...mono, color: C.muted }} className="text-[10px] px-2 py-1 rounded hover:bg-black/5 flex-shrink-0">Got it</button>
+            </div>
+          );
+        })()}
 
         {/* analyse */}
         <button
@@ -1184,14 +1316,24 @@ function FootageFinder() {
             <div style={{ ...mono, color: "#f4ead7" }} className="text-[12px]">
               <span className="font-bold">{selectedCount}</span> clip{selectedCount > 1 ? "s" : ""} selected
             </div>
-            <div className="flex items-center gap-2">
-              <button onClick={exportShotList} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <button onClick={exportShotList} disabled={!!zipping} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
                 <FileText size={12} /> Shot list
               </button>
-              <button onClick={downloadAll} style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold hover:opacity-90">
-                <Download size={12} /> Download all
+              <button onClick={downloadAll} disabled={!!zipping} title="Save each clip as its own separate file" style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
+                <Download size={12} /> Files
               </button>
-              <button onClick={() => setSelected({})} style={{ color: "#f4ead7" }} className="p-1.5 rounded hover:bg-white/10" title="Clear selection">
+              <button onClick={downloadZip} disabled={!!zipping} title="Bundle all selected clips into one .zip" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold hover:opacity-90 disabled:opacity-70">
+                {zipping ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    {zipping.packing != null ? `Packing ${zipping.packing}%` : `Zipping ${zipping.done}/${zipping.total}`}
+                  </>
+                ) : (
+                  <><Package size={12} /> Download ZIP</>
+                )}
+              </button>
+              <button onClick={() => setSelected({})} disabled={!!zipping} style={{ color: "#f4ead7" }} className="p-1.5 rounded hover:bg-white/10 disabled:opacity-40" title="Clear selection">
                 <Trash2 size={14} />
               </button>
             </div>
