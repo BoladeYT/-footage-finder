@@ -137,6 +137,11 @@ function splitIntoScenes(script) {
 // action but "A hundred years ago" is just a lead-in), so a human-written rule
 // can't do it well; the model can. Returns an array of short scene lines.
 async function segmentScript(script) {
+  // Some scripts have a blank line between every sentence. That formatting makes
+  // the model read each isolated line as its own beat and OVER-SPLIT (an 8-min
+  // script ballooning to 100+ scenes). Collapse the empty lines into flowing
+  // prose first so it segments by MEANING, not by how the text was spaced out.
+  const tidy = script.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, " ").trim();
   const prompt =
     `You are a video editor breaking a YouTube script into individual B-roll shots.\n` +
     `Split the script into separate FILMABLE BEATS - one distinct visual per beat, IN THE ` +
@@ -147,17 +152,16 @@ async function segmentScript(script) {
     `        -> "A safe childhood"   (WRONG: drops "making kids weaker" and flips the meaning)\n` +
     `  GOOD: "The safest childhood in history might actually be making kids weaker"\n` +
     `        -> ["The safest childhood in history might actually be making kids weaker"]  (kept whole)\n\n` +
-    `WHEN TO SPLIT - only when one sentence lists several DIFFERENT things a camera would film ` +
-    `separately (different actions, or distinct states). Keep each piece's real words; you may ` +
-    `carry the subject forward so a piece stands alone, but change nothing else:\n` +
+    `AIM FOR ROUGHLY ONE BEAT PER SENTENCE. Most sentences are a single shot - keep them whole. ` +
+    `Only split a sentence when it shows two or more clearly SEPARATE ACTIONS a camera would film ` +
+    `as different shots. Keep each piece's real words; you may carry the subject forward so a ` +
+    `piece stands alone, but change nothing else:\n` +
     `  "kids climbed trees, built forts, and disappeared outside for hours"\n` +
-    `    -> ["kids climbed trees", "kids built forts", "kids disappeared outside for hours"]\n` +
-    `  "the room they're in is warm, safe, well-lit"\n` +
-    `    -> ["a warm room", "a safe room", "a well-lit room"]\n` +
-    `  "whether it was sunny or cloudy, summer or winter"\n` +
-    `    -> ["a sunny day", "a cloudy day", "a summer scene", "a winter scene"]\n\n` +
-    `WHEN TO KEEP AS ONE - an abstract claim or single idea with no distinct sub-actions, and ` +
-    `commas that just describe the SAME thing, stay ONE beat in the script's own words:\n` +
+    `    -> ["kids climbed trees", "kids built forts", "kids disappeared outside for hours"]\n\n` +
+    `KEEP AS ONE - a single idea, or a list of ADJECTIVES/moods describing the SAME thing, stays ` +
+    `ONE beat in the script's own words. Do NOT split descriptive words into separate shots ` +
+    `(one clip covers the whole mood):\n` +
+    `  "the room they're in is warm, safe, well-lit" -> ["a warm, safe, well-lit room"]  (one room)\n` +
     `  "an ordinary, perfectly nice room" -> ["an ordinary, perfectly nice room"]  (still one room)\n` +
     `  "a crisp point on the retina, the sheet of light-sensitive cells lining the back of it"\n` +
     `    -> ["light landing in a crisp point on the retina"]  (the rest just defines the retina)\n\n` +
