@@ -60,41 +60,57 @@ const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif
 /* ------------------------------------------------------------------ */
 /*  WAITING ROOM — facts + time estimate                               */
 /* ------------------------------------------------------------------ */
-// A long script takes a couple of minutes, and a silent progress bar makes that
-// feel like a hang. These rotate in the status panel while the tool works, so
-// there is always visible proof something is happening — and half of them teach
-// you something about the tool or about cutting B-roll.
+// Even a fast run has a quiet stretch, and a silent progress bar makes that feel
+// like a hang. These rotate in the status panel while the tool works, so there is
+// always visible proof something is happening — and half of them teach you
+// something about the tool or about cutting footage.
+//
+// Written deliberately in PLAIN ENGLISH: short sentences, everyday words, one
+// idea each. The user's note was that the old wording had to be read twice, so
+// anything needing a second pass has been split into two simple sentences.
 const FACTS = [
-  "Every line is read in the context of your whole script — that's why the keywords fit the moment, not just the words.",
-  "In a hurry? 2 clips per scene loads about twice as fast as 4. It's in Settings.",
-  "B-roll holds attention best when it changes every 3–5 seconds. Slower than that and the eye wanders off.",
-  "Photos count. A slow push-in on a still often cuts better than a shaky clip.",
-  "Your Pexels and Pixabay keys never leave your browser. The AI key is hidden on the server. Nothing is sent anywhere else.",
-  "The ZIP numbers every file in script order, so your timeline half-builds itself.",
-  "Click a clip's picture to pick it. A tick appears, and it joins the download list at the bottom.",
-  "Hover a clip to preview it silently. Click Expand to watch it big, with sound.",
-  "Don't like a scene's clips? Shuffle gets the next page. Regenerate rewrites the keyword.",
-  "Any keyword can be edited by hand — click it, type, press Enter. That scene re-searches on its own.",
-  "Free footage sites are strongest on broad human moments: hands, faces, walking, weather, city streets.",
-  "The phone and monitor icons switch one scene to portrait or landscape without redoing the rest.",
-  "Pexels allows 200 searches an hour per key. Three keys is 600 — which is why backup keys are worth the two minutes.",
-  "The slowest part of a run is the AI reading your script. It only has to do that once.",
-  "A cut lands better on a hard consonant than on a vowel. Read the line aloud and you'll hear where it wants to go.",
-  "Wide shot, then detail, then reaction. Three clips and a scene feels directed instead of decorated.",
-  "Nothing here expires. This copy is yours and it'll work the same next year.",
-  "If a scene comes back empty, the keyword was too specific — the tool already retried it broader for you.",
-  "Shot list gives you a text file of every clip and its scene number. Useful if someone else edits.",
-  "Motion carrying on in the same direction keeps the eye calm. Reversing it wakes the viewer up.",
-  "Still going. Long scripts mean more scenes, and every scene gets its own search.",
+  "The AI reads your whole script first. So it knows what each line is really about.",
+  "In a hurry? Pick 2 clips per scene instead of 4. It loads twice as fast.",
+  "Change your footage every 3 to 5 seconds. Hold one clip longer and people look away.",
+  "Don't skip photos. A slow zoom on a photo often looks better than a shaky video.",
+  "Your keys stay in your own browser. Nobody else can see them.",
+  "The ZIP names every file in script order. Just drag them into your editor.",
+  "Click a picture to pick that clip. A tick appears and it goes to the bar at the bottom.",
+  "Put your mouse over a clip to preview it. Click Expand to watch it big, with sound.",
+  "Don't like the clips? Shuffle shows more. Regenerate writes a new search.",
+  "You can edit any search yourself. Click it, type, then press Enter.",
+  "Free sites are best at simple things: hands, faces, walking, weather, streets.",
+  "The phone and screen icons flip one scene to tall or wide. The rest stay as they are.",
+  "Pexels gives you 200 searches an hour per key. Add a second key and you get 400.",
+  "The AI reads your script once at the start. After that it just searches.",
+  "Say the line out loud. The place you naturally pause is where the cut belongs.",
+  "Wide shot, then close-up, then a face. Three clips make a scene feel planned.",
+  "Nothing here runs out. This copy is yours to keep.",
+  "If a scene comes back empty, the search was too exact. The tool already tried a wider one.",
+  "Shot list saves a text file of every clip and its scene number. Handy if someone else edits.",
+  "Keep movement going the same way and the cut feels smooth. Flip it and people notice.",
+  "Still working. Long scripts have more scenes, and each one gets its own search.",
 ];
 
 // Rough wall-clock estimate for a run, in seconds. Deliberately a little
 // generous — a countdown that finishes early feels good, one that stalls at
 // "1s left" does not. Parameterised so it stays honest if the pacing changes.
+//
+// All the numbers below were MEASURED on 2026-09-02 against the lite model the
+// relay now uses, on real narration scripts of 791 / 1,582 / 2,373 words:
+//   whole-script split   4.2s / 5.7s / 10.4s   (median of 4 samples each)
+//   one keyword batch    1.1-1.5s, flat, whatever the script length
+// Two of the twelve split calls stalled at 28-34s — that is Google's own
+// queueing, not script length (the 33.7s one was the SHORTEST script). So the
+// split figure leans high on purpose. Under-promising the time is the only
+// version of this that actually annoys anyone.
 function estimateSeconds({ sceneCount, gapMs = GEMINI_MIN_GAP_MS, pool = SCENE_POOL }) {
   const batches = Math.max(1, Math.ceil(sceneCount / KEYWORD_BATCH));
-  const segment = 20; // one AI pass over the whole script
-  const phase1 = ((batches - 1) * gapMs) / 1000 + 24; // starts are staggered, then the last call runs
+  // The split call reads the WHOLE script at once, so unlike the keyword
+  // batches it gets slower as the script gets longer. Scene count tracks length
+  // closely (measured ~9 words per scene), so it stands in for word count.
+  const segment = 5 + sceneCount * 0.04; // 87 scenes -> 8.5s, 261 -> 15.4s
+  const phase1 = ((batches - 1) * gapMs) / 1000 + 4; // staggered starts, then the last call runs
   const phase2 = (sceneCount / pool) * 2.2; // footage searches, several at a time
   return Math.round(segment + phase1 + phase2);
 }
@@ -165,14 +181,33 @@ function throttleGemini() {
 }
 
 async function callClaude(prompt) {
-  const MAX_RETRIES = 5;
+  const MAX_RETRIES = 4;
+  // Never wait forever on one call. This has to sit ABOVE the relay's own 45s
+  // Gemini timeout, or the browser hangs up first and throws the relay's clean
+  // "temporary, please retry" answer away. Order that matters:
+  //     45s relay gives up on Gemini  <  55s here  <  60s Vercel kills the function
+  // So this is only a backstop for the rare case where the relay itself stops
+  // answering. Without it a single hung request holds up the whole run — which
+  // is exactly what a stalled model once did.
+  const CALL_TIMEOUT_MS = 55000;
   for (let attempt = 0; ; attempt++) {
     await throttleGemini();
-    const res = await fetch("/api/keywords", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
-    });
+    let res;
+    try {
+      res = await fetch("/api/keywords", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      });
+    } catch (e) {
+      // Timed out or the network dropped. Treat it like a temporary fault.
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, Math.min(15000, 2000 * Math.pow(2, attempt))));
+        continue;
+      }
+      throw new Error("Claude request failed (timeout)");
+    }
     if (res.ok) {
       const data = await res.json();
       setGeminiGap(data.keyCount); // older relays don't send this; ignored if absent
@@ -181,12 +216,12 @@ async function callClaude(prompt) {
         .map((b) => b.text)
         .join("");
     }
-    // 429 = rate limited, 500/503 = model briefly overloaded. These are
-    // temporary — wait (2s, 4s, 8s, ... capped at 30s) and try again rather
-    // than failing the scene. Any other status is a real error, so throw.
+    // 429 = rate limited, 500/503 = model briefly overloaded or slow to answer.
+    // These are temporary — wait (2s, 4s, 8s, capped at 15s) and try again
+    // rather than failing the scene. Any other status is a real error, so throw.
     const temporary = res.status === 429 || res.status === 503 || res.status === 500;
     if (temporary && attempt < MAX_RETRIES) {
-      const backoff = Math.min(30000, 2000 * Math.pow(2, attempt));
+      const backoff = Math.min(15000, 2000 * Math.pow(2, attempt));
       await new Promise((r) => setTimeout(r, backoff));
       continue;
     }
@@ -917,12 +952,16 @@ function FootageFinder() {
   }, [booted, script, scenes, selected]);
 
   // While a run is in flight: tick the clock every second (that's what makes the
-  // countdown move) and rotate the fun fact every 7 seconds. Both intervals only
+  // countdown move) and rotate the fun fact every 12 seconds. Both intervals only
   // exist while analysing, so an idle page does no work at all.
+  //
+  // 12s, not the 7s it used to be: 7 was long enough to READ a line but not long
+  // enough to read it, look away at the progress bar, and look back. The user
+  // reported the facts felt rushed, and a fact you half-read is worse than none.
   useEffect(() => {
     if (!analyzing) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
-    const f = setInterval(() => setFactIdx((n) => (n + 1) % FACTS.length), 7000);
+    const f = setInterval(() => setFactIdx((n) => (n + 1) % FACTS.length), 12000);
     return () => {
       clearInterval(t);
       clearInterval(f);
@@ -1080,6 +1119,14 @@ function FootageFinder() {
         if (bad) throw bad.reason;
       } finally {
         clearInterval(flushTimer);
+        // Land EVERY card, whatever happened. Previously a scene whose search
+        // threw (a rejected Pexels key is the one that escapes searchScene)
+        // never reached `acc[i].loading = false`, so its card sat on "Finding
+        // footage..." FOREVER — the run had already ended and the error message
+        // was showing, but twelve cards were still breathing away as if they
+        // were working. That is the "it never gives me the footage" symptom.
+        // Measured 2026-09-02: run ended at ~21s, cards still pending at 110s.
+        acc.forEach((s) => { s.loading = false; });
         dirty = true;
         flush();
       }
@@ -1496,34 +1543,21 @@ function FootageFinder() {
             </div>
           </div>
 
-          {/* What "2" and "4" really mean. The number is per media type per site,
-              so with videos + photos both on you get double it, and with both
-              sites on you get double again — which is why a scene set to "2" can
-              come back with eight thumbnails. Rather than quietly dividing the
-              number (Pixabay refuses a page size under 3), the setting says out
-              loud what it's about to fetch. Clip count does NOT affect the hourly
-              limit — that counts searches, i.e. scenes. */}
-          {(() => {
-            const typeCount = (mediaTypes.videos ? 1 : 0) + (mediaTypes.photos ? 1 : 0);
-            const srcCount = (sources.pexels ? 1 : 0) + (sources.pixabay ? 1 : 0);
-            const per = perScene * Math.max(1, typeCount) * Math.max(1, srcCount);
-            const bits = [];
-            if (mediaTypes.videos && mediaTypes.photos) bits.push("videos and photos");
-            else if (mediaTypes.videos) bits.push("videos");
-            else if (mediaTypes.photos) bits.push("photos");
-            const sites = [sources.pexels && "Pexels", sources.pixabay && "Pixabay"].filter(Boolean).join(" and ");
-            return (
-              <div style={{ ...mono, color: C.muted }} className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed">
-                <Info size={12} className="mt-[1px] flex-shrink-0" />
-                <span>
-                  {per} clips per scene as things stand — it's {perScene} of each kind from each site,
-                  and you have {bits.join("")}{sites ? " from " + sites : ""} switched on. More to choose
-                  from, but each scene loads slower and ZIPs get bigger. This doesn't touch your hourly
-                  limit; that counts scenes, not clips.
-                </span>
-              </div>
-            );
-          })()}
+          {/* Heads-up shown ONLY when "4" is picked. This replaced a line that
+              was always on screen and spelled out the real total ("8 clips per
+              scene as things stand — it's 2 of each kind from each site..."):
+              accurate, but the user had to read it twice, and it shouted at you
+              even when nothing was wrong. Back to the old behaviour — silence on
+              2, one short warning on 4 — in plain words. */}
+          {perScene === 4 && (
+            <div style={{ ...mono, color: C.muted }} className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed">
+              <Info size={12} className="mt-[1px] flex-shrink-0" />
+              <span>
+                More clips to choose from. But scenes load slower and ZIP files get bigger.
+                This does not use up your hourly limit.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Long-script heads-up: appears ONLY when the pasted script is big enough
@@ -1537,12 +1571,12 @@ function FootageFinder() {
               <AlertTriangle size={15} style={{ color: "#b8862b" }} className="mt-[1px] flex-shrink-0" />
               <div className="flex-1">
                 <div style={{ ...mono, color: C.ink }} className="text-[11.5px] font-semibold">
-                  Heads-up: this is a long script (~{sentences} scenes)
+                  This is a long script (about {sentences} scenes)
                 </div>
                 <div style={{ ...mono, color: C.muted }} className="text-[10.5px] leading-relaxed mt-1">
-                  Longer scripts make more searches and can hit the free hourly limit near the end —
-                  that's expected, not a bug. If footage stops partway, wait about an hour, or add backup
-                  keys in Settings. Splitting a very long script into parts also helps.
+                  Long scripts do a lot of searches. You may run out of free searches near the end.
+                  That is normal, not a fault. If the footage stops partway, wait an hour and try
+                  again, or add backup keys in Settings.
                 </div>
               </div>
               <button onClick={() => setDismissWarn(true)} style={{ ...mono, color: C.muted }} className="text-[10px] px-2 py-1 rounded hover:bg-black/5 flex-shrink-0">Got it</button>
@@ -1562,7 +1596,7 @@ function FootageFinder() {
           return (
             <div style={{ ...mono, color: C.muted }} className="mt-5 flex items-center justify-center gap-2 text-[11px]">
               <Film size={12} className="flex-shrink-0" />
-              <span>About {n} {n === 1 ? "scene" : "scenes"} · roughly {fmtDuration(estimateSeconds({ sceneCount: n }))} to find footage for all of them</span>
+              <span>About {n} {n === 1 ? "scene" : "scenes"} · around {fmtDuration(estimateSeconds({ sceneCount: n }))} to find the footage</span>
             </div>
           );
         })()}
@@ -1718,7 +1752,7 @@ function FootageFinder() {
                           <div
                             key={r.id}
                             onClick={() => toggleSel(r)}
-                            title={sel ? "Picked for your download list — click to un-pick" : "Click the picture to pick this clip for your download list"}
+                            title={sel ? "Picked. Click to un-pick it." : "Click the picture to pick this clip."}
                             onMouseEnter={(e) => {
                               const v = e.currentTarget.querySelector("video");
                               if (!v) return;
@@ -1789,7 +1823,7 @@ function FootageFinder() {
                                       <Play size={9} /> <span className="ff-lbl">Expand</span>
                                     </button>
                                   )}
-                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length, s.keyword); }} title="Download — save this one clip to your computer now (this is not how you pick it — click the picture for that)" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length, s.keyword); }} title="Saves this clip to your computer now. To pick it instead, click the picture." style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
                                     <Download size={9} /> <span className="ff-lbl">Download</span>
                                   </button>
                                   <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="View — open the original page in a new tab" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
@@ -1861,7 +1895,7 @@ function FootageFinder() {
             <div className="flex items-center justify-between mt-3">
               <span style={{ ...mono, color: "#f4ead7" }} className="text-[11px]">{playing.label}</span>
               <div className="flex gap-2">
-                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw)} title="Download — save this clip to your computer" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
+                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw)} title="Save this clip to your computer" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
                 <button onClick={() => window.open(playing.url, "_blank")} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
                 <button onClick={() => setPlaying(null)} title="Close (or press Escape)" style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
               </div>
