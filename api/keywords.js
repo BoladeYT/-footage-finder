@@ -12,15 +12,41 @@
 // Gemini returns a different shape, so at the end we repackage Gemini's answer
 // into that same shape. That way app.jsx never had to change.
 
-// "gemini-flash-latest" is an alias that always points to Google's current
-// free Flash model, so the tool keeps working even when Google retires a
-// specific version (which is exactly what breaks a pinned name over time).
-const MODEL = "gemini-flash-latest";
+// A "-latest" name is an alias: Google keeps it pointed at a current model, so
+// the tool keeps working even when a specific version is retired (a pinned name
+// like "gemini-2.5-flash" eventually returns 404 and breaks everything).
+//
+// We use the LITE alias on purpose. Measured 2026-09-02 with the real prompts
+// from app.jsx, on real narration scripts of 791 / 1,582 / 2,373 words:
+//   gemini-flash-lite-latest  4-11s to split a script, 1.1-1.5s per keyword batch
+//   gemini-3.1-flash-lite     10-18s          (5x slower, vaguer keywords)
+//   gemini-3.6-flash          503 "high demand" after 52s   (unusable)
+//   gemini-flash-latest       NO REPLY AT ALL after 120s    (this is what was
+//                             deployed, and it is why a 54-second job ran past
+//                             8 minutes: every call hung, then retried)
+// The lite model was also the BEST at this job, not just the fastest — richer,
+// more cinematic queries with framing words. Big models "think" before
+// answering, which is wasted effort for writing a six-word search phrase.
+// It also never truncated: the longest script above produced 261 scenes using
+// 3,531 of the 8,192 output tokens, and gave the identical answer every time.
+const MODEL = "gemini-flash-lite-latest";
 
-// Vercel cuts a serverless function off after ~10s by default. A "thinking"
-// Gemini model reading the whole script can take 15-30s to answer, so without
-// this it gets killed mid-response and the tool has to retry, making long
-// scripts crawl. 60s is the max the Hobby (free) plan allows — plenty of room.
+// If Google has not answered in this long, stop waiting, return 503, and let the
+// browser retry. Without this a model that hangs forever holds the whole run
+// hostage — which is exactly what the old model did.
+//
+// 45s, not the 25s first tried here. Measured over twelve whole-script splits:
+// ten came back in 3-11s, but TWO stalled at 28s and 34s. That is Google's own
+// queueing, not script length — the 34s stall was on the SHORTEST script. A 25s
+// limit therefore killed roughly one call in six that was going to succeed,
+// costing a pointless 25s wait plus a retry. 45s still separates "slow today"
+// from "dead" (the broken model gave nothing at all after 120s), and leaves
+// room under Vercel's 60s ceiling to return the error properly.
+const UPSTREAM_TIMEOUT_MS = 45000;
+
+// Vercel cuts a serverless function off after ~10s by default. Raising it gives
+// the timeout above room to fire and return a clean error instead of the
+// function being killed mid-flight. 60s is the max the Hobby (free) plan allows.
 export const maxDuration = 60;
 
 // The relay can hold up to 3 Gemini keys: GEMINI_KEY (main) plus optional
@@ -66,17 +92,26 @@ export default async function handler(req, res) {
 
   try {
     // Try each key in order; rotate to the next ONLY on a rate-limit/overload
-    // (429/503). Any other status is a real error, so stop and report it.
+    // (429/503) or a timeout. Any other status is a real error, so stop and report it.
     let last = { status: 500, raw: "No Gemini keys configured" };
     for (let i = 0; i < keys.length; i++) {
-      const upstream = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": keys[i] },
-          body,
-        }
-      );
+      let upstream;
+      try {
+        upstream = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": keys[i] },
+            body,
+            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+          }
+        );
+      } catch (e) {
+        // Timed out or the connection failed. Report it as 503 so the browser
+        // treats it as temporary and retries, rather than killing the scene.
+        last = { status: 503, raw: "Gemini did not answer within " + UPSTREAM_TIMEOUT_MS + "ms" };
+        continue; // try the next key, if there is one
+      }
       const raw = await upstream.text();
       if (upstream.ok) { last = { status: 200, raw }; break; }
       last = { status: upstream.status, raw };
