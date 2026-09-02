@@ -17,6 +17,147 @@
 
     <style>
       html, body, #root { height: 100%; margin: 0; }
+
+      /* ------------------------------------------------------------------
+         The phone and mouse rules live HERE, not in app.jsx.
+
+         app.jsx injects its own <style> from inside the main screen's markup,
+         so rules written there never reach the first-run setup wizard — the
+         wizard is shown instead of the main screen, not inside it. Measured:
+         the 16px field rule below worked on the paste screen and did nothing
+         to the wizard's key fields. In this file it covers every screen, and
+         any screen added later.
+
+         Only rules that don't need the current theme's colours belong here.
+         The few in app.jsx that mix a colour in (.ff-card, .ff-scroll,
+         .ff-tile img) have to stay where the colours are.
+
+         Tailwind's CDN adds its own stylesheet after this one, so anything
+         here that overrules a Tailwind class is marked !important.
+         ------------------------------------------------------------------ */
+
+      /* ------------------------------------------------------------------
+         Motion.
+
+         Everything here animates only `opacity` and `transform`, which the
+         browser hands to the graphics card and can run without re-doing any
+         layout. That matters: a long script can put four hundred thumbnails
+         on the page at once, and anything touching width/height/top/left at
+         that scale stutters. Nothing loops — each animation plays once, on
+         the way in — so there is never motion sitting there burning battery.
+
+         Durations are short on purpose. Long enough to show where a thing
+         came from, short enough that nobody waiting on footage feels held up.
+
+         The reduced-motion block at the bottom switches all of it off for
+         anyone who has asked their phone or computer for less movement.
+         ------------------------------------------------------------------ */
+
+      @keyframes ffRise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+      @keyframes ffFade { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes ffSlideUp { from { transform: translateY(100%); } to { transform: none; } }
+      @keyframes ffPop { from { opacity: 0; transform: scale(0.965); } to { opacity: 1; transform: none; } }
+      @keyframes ffBreathe { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+      /* A scene card easing up as its footage lands, so you can see the page
+         filling in rather than watching blocks appear out of nowhere. */
+      .ff-scene { animation: ffRise .3s ease-out both; }
+
+      /* Thumbnails: opacity only. There can be hundreds arriving at once and
+         this is the cheapest fade there is. */
+      .ff-tile { animation: ffFade .28s ease-out both; }
+
+      /* The bar of picked clips rises from the bottom edge it lives on. */
+      .ff-dlbar { animation: ffSlideUp .26s cubic-bezier(.2,.8,.25,1) both; }
+
+      /* The full-screen player: the dark surround fades, the video grows in
+         very slightly, which reads as the clip coming forward. */
+      .ff-overlay { animation: ffFade .18s ease-out both; }
+      .ff-pop { animation: ffPop .22s cubic-bezier(.2,.8,.25,1) both; }
+
+      /* Each fun fact dissolves into the next instead of snapping over. */
+      .ff-fact { animation: ffFade .5s ease-out both; }
+
+      /* A scene still waiting its turn breathes gently, so a stalled-looking
+         page still reads as a working one. This is the only repeating
+         animation in the file, and it stops the moment results arrive. */
+      .ff-pending { animation: ffBreathe 1.9s ease-in-out infinite; }
+
+      /* Every button gives a little under the press. On a phone this is the
+         only confirmation you get that a tap registered at all. */
+      button:active { transform: scale(0.97); }
+      button { transition: transform .09s ease-out; }
+
+      /* A mouse is present: the thumbnail eases in under the cursor. Kept out
+         of the touch case below, where there is no cursor to leave and the
+         image would sit stuck mid-zoom after a tap. */
+      @media (hover: hover) {
+        .ff-tile:hover img{transform:scale(1.05);}
+      }
+
+      /* Phones and tablets. Hover either never fires or sticks after a tap, so
+         anything this app revealed on hover has to be permanently on here, and
+         every target grows to something a thumb can actually hit. */
+      @media (hover: none) {
+        /* the Expand / Download / View bar on each clip: it was invisible yet
+           still tappable, and the third button fell outside the tile */
+        .ff-actions{opacity:1 !important;}
+        .ff-actions .ff-lbl,.ff-actions .ff-src{display:none;}
+        .ff-actions .ff-bar{padding:6px !important;}
+        .ff-actions button{min-width:34px;min-height:34px;padding:0 !important;display:inline-flex;align-items:center;justify-content:center;}
+        .ff-actions button svg{width:15px;height:15px;}
+        /* the "add a search" seam between scenes */
+        .ff-seam{opacity:.85 !important;padding:5px 0 !important;}
+        .ff-seam .ff-chip{padding:5px 10px !important;font-size:10px !important;}
+        /* per-scene tools: orientation pair, shuffle, regenerate/remove */
+        .ff-tools button{min-width:34px;min-height:34px;display:inline-flex;align-items:center;justify-content:center;}
+        /* Side by side, the tools squeezed the script line into a 112px ribbon
+           five lines tall. Let the head wrap so the line keeps the full width
+           and the tools drop to their own row underneath it. */
+        .ff-head{flex-wrap:wrap !important;}
+        .ff-head .ff-tools{width:100%;justify-content:flex-end;margin-top:6px;}
+        /* the keyword line doubles as the edit button — wide but only 20px tall */
+        .ff-head button{min-height:32px;}
+        /* Select all / Clear: wide enough already, just too short to hit */
+        .ff-foot button{min-height:34px;}
+        /* the download bar that slides up once clips are picked */
+        .ff-dl button{min-width:34px;min-height:34px;}
+        /* the full-screen player: Save / View / close under the video */
+        .ff-modal button{min-width:34px;min-height:34px;}
+        /* "Get a free key at pexels.com" in the wizard — a 15px-tall line of
+           text is the one thing a new buyer has to hit on their phone */
+        a.underline{min-height:34px;display:inline-flex;align-items:center;}
+        /* the setup wizard's 1-2-3 circles are buttons now, so you can jump
+           straight back to a step instead of walking through all three — but
+           at 24px across they were too small to aim at with a thumb */
+        .ff-step{min-width:34px !important;min-height:34px !important;}
+        /* Safari on iPhone zooms the whole page in when you tap a field whose
+           text is under 16px, and never zooms back out — you end up dragging a
+           magnified page sideways. 16px keeps the view still. */
+        textarea,input[type="text"],input[type="password"],input:not([type]){font-size:16px !important;}
+      }
+
+      /* ------------------------------------------------------------------
+         "Reduce motion" is a setting on every phone and computer, and people
+         who turn it on usually have a reason — motion sickness, vertigo,
+         migraine, or simply finding movement distracting. When it's on, the
+         tool shows the same thing, just already in place: no rising, no
+         sliding, no breathing. The hover zoom on thumbnails goes too.
+
+         Written as `0.01ms` rather than `none` because animations that never
+         run also never fire their finished event, and `both` would leave some
+         elements holding their invisible starting frame forever.
+         ------------------------------------------------------------------ */
+      @media (prefers-reduced-motion: reduce) {
+        *,*::before,*::after{
+          animation-duration:0.01ms !important;
+          animation-iteration-count:1 !important;
+          transition-duration:0.01ms !important;
+          scroll-behavior:auto !important;
+        }
+        button:active{transform:none;}
+        .ff-tile:hover img{transform:none !important;}
+      }
     </style>
   </head>
   <body>

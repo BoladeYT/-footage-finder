@@ -5,7 +5,7 @@ const {
   Play, Download, ExternalLink, Shuffle, RefreshCw, Check, X,
   Film, Image: ImageIcon, Sparkles, KeyRound, ArrowRight,
   Loader2, FileText, Settings, Pencil, CheckCircle2, Circle, Trash2,
-  Sun, Moon, Monitor, Smartphone, Package, Info, AlertTriangle,
+  Sun, Moon, Monitor, Smartphone, Package, Info, AlertTriangle, Plus,
 } = lucideReact;
 
 /* ------------------------------------------------------------------ */
@@ -58,15 +58,62 @@ const mono = { fontFamily: '"SFMono-Regular","SF Mono",Menlo,Consolas,"Roboto Mo
 const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif' };
 
 /* ------------------------------------------------------------------ */
+/*  WAITING ROOM — facts + time estimate                               */
+/* ------------------------------------------------------------------ */
+// A long script takes a couple of minutes, and a silent progress bar makes that
+// feel like a hang. These rotate in the status panel while the tool works, so
+// there is always visible proof something is happening — and half of them teach
+// you something about the tool or about cutting B-roll.
+const FACTS = [
+  "Every line is read in the context of your whole script — that's why the keywords fit the moment, not just the words.",
+  "In a hurry? 2 clips per scene loads about twice as fast as 4. It's in Settings.",
+  "B-roll holds attention best when it changes every 3–5 seconds. Slower than that and the eye wanders off.",
+  "Photos count. A slow push-in on a still often cuts better than a shaky clip.",
+  "Your Pexels and Pixabay keys never leave your browser. The AI key is hidden on the server. Nothing is sent anywhere else.",
+  "The ZIP numbers every file in script order, so your timeline half-builds itself.",
+  "Click a clip's picture to pick it. A tick appears, and it joins the download list at the bottom.",
+  "Hover a clip to preview it silently. Click Expand to watch it big, with sound.",
+  "Don't like a scene's clips? Shuffle gets the next page. Regenerate rewrites the keyword.",
+  "Any keyword can be edited by hand — click it, type, press Enter. That scene re-searches on its own.",
+  "Free footage sites are strongest on broad human moments: hands, faces, walking, weather, city streets.",
+  "The phone and monitor icons switch one scene to portrait or landscape without redoing the rest.",
+  "Pexels allows 200 searches an hour per key. Three keys is 600 — which is why backup keys are worth the two minutes.",
+  "The slowest part of a run is the AI reading your script. It only has to do that once.",
+  "A cut lands better on a hard consonant than on a vowel. Read the line aloud and you'll hear where it wants to go.",
+  "Wide shot, then detail, then reaction. Three clips and a scene feels directed instead of decorated.",
+  "Nothing here expires. This copy is yours and it'll work the same next year.",
+  "If a scene comes back empty, the keyword was too specific — the tool already retried it broader for you.",
+  "Shot list gives you a text file of every clip and its scene number. Useful if someone else edits.",
+  "Motion carrying on in the same direction keeps the eye calm. Reversing it wakes the viewer up.",
+  "Still going. Long scripts mean more scenes, and every scene gets its own search.",
+];
+
+// Rough wall-clock estimate for a run, in seconds. Deliberately a little
+// generous — a countdown that finishes early feels good, one that stalls at
+// "1s left" does not. Parameterised so it stays honest if the pacing changes.
+function estimateSeconds({ sceneCount, gapMs = GEMINI_MIN_GAP_MS, pool = SCENE_POOL }) {
+  const batches = Math.max(1, Math.ceil(sceneCount / KEYWORD_BATCH));
+  const segment = 20; // one AI pass over the whole script
+  const phase1 = ((batches - 1) * gapMs) / 1000 + 24; // starts are staggered, then the last call runs
+  const phase2 = (sceneCount / pool) * 2.2; // footage searches, several at a time
+  return Math.round(segment + phase1 + phase2);
+}
+
+function fmtDuration(s) {
+  if (s >= 60) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+/* ------------------------------------------------------------------ */
 /*  API HELPERS                                                        */
 /* ------------------------------------------------------------------ */
-// Google Gemini's free tier allows only ~15 requests per minute. A long script
-// fires many keyword calls in a few seconds, which blows past that and comes
-// back as 429 "rate limited" — the cause of scenes showing the raw script line
-// instead of a real search. Two defences below keep every AI call reliable:
+// Google Gemini's free tier allows only ~15 requests per minute PER KEY. A long
+// script fires many keyword calls in a few seconds, which blows past that and
+// comes back as 429 "rate limited" — the cause of scenes showing the raw script
+// line instead of a real search. Two defences keep every AI call reliable:
 //
-//   1) throttleGemini() — a shared gate that spaces our calls ~4.2s apart, so
-//      we stay just under the 15/minute ceiling instead of flooding it.
+//   1) throttleGemini() — a shared gate that spaces our calls out, so we stay
+//      under the per-minute ceiling instead of flooding it.
 //   2) callClaude()'s retry loop — if a call is rate-limited anyway (429) or the
 //      model is briefly overloaded (500/503), it waits and tries again a few
 //      times with growing pauses, instead of giving up and falling back to a
@@ -74,12 +121,36 @@ const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif
 //
 // (The function is still named callClaude for historical reasons; the relay it
 // calls now talks to Google Gemini, not Claude. The browser never sees the key.)
-// Pacing between AI calls. The free Gemini tier allows ~15 calls/min PER KEY,
-// and the relay rotates across 3 keys, so the safe combined ceiling is ~45/min.
-// 1600ms ≈ 37 calls/min leaves comfortable margin, and if any single key does
-// hit its cap the relay just rotates to the next one. (Was 4200ms — tuned for a
-// single key. With 3 keys we can go much faster without risking rate limits.)
-const GEMINI_MIN_GAP_MS = 1600; // 60000 / 1600 ≈ 37 calls per minute across 3 keys
+
+/* --- The three speed knobs. Everything about how fast a run goes is here. --- */
+
+// Gap between AI calls. ~15/min per key, so with the relay's 3 keys the safe
+// combined ceiling is ~45/min; 1600ms ≈ 37/min leaves comfortable margin, and if
+// one key does hit its cap the relay rotates to the next. This is the default —
+// setGeminiGap() below narrows it automatically if the relay reports fewer keys.
+let GEMINI_MIN_GAP_MS = 1600; // 60000 / 1600 ≈ 37 calls per minute across 3 keys
+
+// How many script lines get keyworded per AI call. Bigger = fewer calls but a
+// longer wait for each one; 10 is the sweet spot found in testing.
+const KEYWORD_BATCH = 10;
+
+// How many scenes search for footage at the same time. The old code did one at a
+// time, which is what made long scripts take an hour. 6 at once is a big speed-up
+// while staying polite to Pexels and Pixabay (see pacePixabay below).
+const SCENE_POOL = 6;
+
+// The browser can't see how many Gemini keys the server holds — the whole point
+// of the relay is that it keeps them hidden. So the relay tells us the *count*
+// (never the keys) with its first reply, and we adjust: 3 keys → 1600ms as
+// before, 1 key → 4800ms so a one-key buyer paces safely instead of hammering a
+// single quota and stalling on 429 retries. Called once, from callClaude().
+let _gapLocked = false;
+function setGeminiGap(keyCount) {
+  if (_gapLocked || !keyCount) return;
+  _gapLocked = true;
+  GEMINI_MIN_GAP_MS = Math.round(4800 / Math.min(3, Math.max(1, keyCount)));
+}
+
 let _geminiChain = Promise.resolve();
 let _geminiLast = 0;
 function throttleGemini() {
@@ -104,6 +175,7 @@ async function callClaude(prompt) {
     });
     if (res.ok) {
       const data = await res.json();
+      setGeminiGap(data.keyCount); // older relays don't send this; ignored if absent
       return (data.content || [])
         .filter((b) => b.type === "text")
         .map((b) => b.text)
@@ -172,7 +244,7 @@ async function segmentScript(script) {
     `- Fold pure lead-in fragments that aren't filmable alone (e.g. "A hundred years ago", ` +
     `"Meanwhile", "On the other hand") into the beat they introduce, don't make them their own beat.\n` +
     `- Preserve the script's order. Do NOT invent, summarize, or add anything not in the script.\n\n` +
-    `Return ONLY a JSON array of strings, in order. No commentary.\n\nScript:\n"""${script}"""`;
+    `Return ONLY a JSON array of strings, in order. No commentary.\n\nScript:\n"""${tidy}"""`;
   const arr = parseJSONArray(await callClaude(prompt));
   return arr.map((s) => (s || "").toString().trim()).filter((s) => s.length > 1);
 }
@@ -311,6 +383,34 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage
 }
 
 /* ---- Pixabay ---- */
+
+// Pixabay allows about 100 requests per minute per key. Searching 6 scenes at once
+// would blow straight through that, so every Pixabay call books a slot here first.
+// It's a sliding 60-second window: we remember when recent calls happened, and if
+// the last minute is already full we wait just long enough for the oldest one to
+// age out. Capacity scales with the number of keys the user has connected (3 keys
+// ≈ 285/min, which is more than a long script needs, so nobody ever waits).
+let _pbCapacity = 95;
+const _pbWindow = []; // timestamps of recent calls, oldest first
+function setPixabayCapacity(keyCount) {
+  _pbCapacity = 95 * Math.max(1, keyCount || 1);
+}
+// One shared promise chain, so two callers can't both look at a full window and
+// both decide there's room.
+let _pbChain = Promise.resolve();
+function pacePixabay() {
+  _pbChain = _pbChain.then(async () => {
+    for (;;) {
+      const cutoff = Date.now() - 60000;
+      while (_pbWindow.length && _pbWindow[0] <= cutoff) _pbWindow.shift();
+      if (_pbWindow.length < _pbCapacity) break;
+      await new Promise((r) => setTimeout(r, _pbWindow[0] - cutoff + 50));
+    }
+    _pbWindow.push(Date.now());
+  });
+  return _pbChain;
+}
+
 async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   const pbOrient = orientation === "portrait" ? "vertical" : "horizontal";
   // Pixabay REQUIRES per_page >= 3 — asking for 2 makes it reject the whole
@@ -318,6 +418,7 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPag
   // photos while "4 clips" worked). So we ask for at least 3, then trim back
   // to the count the user actually wanted. Same trick the video call uses.
   const ask = Math.max(3, perPage);
+  await pacePixabay();
   const r = await fetch(
     `https://pixabay.com/api/?key=${key}&q=${encodeURIComponent(q)}&per_page=${ask}&page=${page}&image_type=photo&orientation=${pbOrient}`
   );
@@ -338,6 +439,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
   // Pixabay's video endpoint has no orientation param, so we request a few
   // extra (double the wanted count) and filter by the clip's own width/height
   // on our side, then trim back to perPage.
+  await pacePixabay();
   const r = await fetch(
     `https://pixabay.com/api/videos/?key=${key}&q=${encodeURIComponent(q)}&per_page=${perPage * 2}&page=${page}`
   );
@@ -375,10 +477,16 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
 // ("child eye roll reluctant expression close-up") degrades gently
 // (-> "child eye roll" -> "child eye") instead of collapsing to nothing.
 // The prompt always puts the subject first, so leading words carry the meaning.
+//
+// A rung that drops only ONE word almost never turns "nothing found" into a
+// hit — the 2-word core is what actually matches stock libraries. So a 4-word
+// query (the common case) now skips straight to the core, halving the requests
+// spent on an empty scene. 5 words or more keeps both rungs, since there the
+// first one drops two words and is a real step wider.
 function broadenQueries(q) {
   const words = q.trim().split(/\s+/);
   const out = [];
-  if (words.length > 3) out.push(words.slice(0, 3).join(" "));
+  if (words.length > 4) out.push(words.slice(0, 3).join(" "));
   if (words.length > 2) out.push(words.slice(0, 2).join(" "));
   return out;
 }
@@ -388,11 +496,20 @@ function broadenQueries(q) {
 // 2nd and 3rd key from separate free accounts multiplies the usable quota, so
 // long scripts and heavy reshuffling don't run dry. A non-rate error (e.g. a
 // rejected key) is thrown straight away — rotating wouldn't help there.
+//
+// Each call STARTS on a different key (round-robin). Always starting at the
+// first one meant key 1 absorbed every request and hit its ceiling alone while
+// 2 and 3 sat untouched — and each fall-through wasted a whole refused request
+// before moving on. Starting one step further along each time spreads the load,
+// so three keys now drain together instead of one at a time.
+let keyTurn = 0;
 async function withKeyRotation(keys, rateSignal, fn) {
   const list = (keys || []).filter(Boolean);
+  if (!list.length) return [];
+  const start = keyTurn++ % list.length;
   for (let i = 0; i < list.length; i++) {
     try {
-      return await fn(list[i]);
+      return await fn(list[(start + i) % list.length]);
     } catch (e) {
       if (e && e.message === rateSignal && i < list.length - 1) continue;
       throw e;
@@ -403,6 +520,8 @@ async function withKeyRotation(keys, rateSignal, fn) {
 
 async function searchScene(q, opts) {
   const { pexelsKeys = [], pixabayKeys = [], sources, mediaTypes, page, orientation = "landscape", perPage = 4 } = opts;
+  // Tell the Pixabay pacer how much room we have this run: more keys, more room.
+  setPixabayCapacity(pixabayKeys.length);
   const runOne = async (query) => {
     const tasks = [];
     if (sources.pexels && pexelsKeys.length) {
@@ -482,17 +601,24 @@ function loadJSZip() {
 }
 
 // Build the ordered, editor-friendly filename for a clip: zero-padded scene
-// number (01_, 02_, ...) so it sorts in timeline order, plus the clip's own id
-// so two clips from the SAME scene never overwrite each other.
-function clipFileName(item, seq, total) {
+// number (01_, 02_, ...) so it sorts in timeline order, then the scene's own
+// search words so the file says what's in it without opening it, then the
+// clip's own number so two clips from the SAME scene never collide.
+// e.g. 03_rain_on_a_window_at_night_7123973.mp4
+function clipFileName(item, seq, total, keyword) {
   const pad = Math.max(2, String(total || 0).length);
   const prefix = seq ? String(seq).padStart(pad, "0") + "_" : "";
-  const base = (item.label || "clip").replace(/[^a-z0-9]+/gi, "_");
-  return `${prefix}${base}.${item.type === "video" ? "mp4" : "jpg"}`;
+  const words = String(keyword || item.label || "clip")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 44);
+  const num = String(item.id || "").replace(/[^0-9]/g, "");
+  return `${prefix}${words || "clip"}${num ? "_" + num : ""}.${item.type === "video" ? "mp4" : "jpg"}`;
 }
 
-async function downloadMedia(item, seq, total) {
-  const name = clipFileName(item, seq, total);
+async function downloadMedia(item, seq, total, keyword) {
+  const name = clipFileName(item, seq, total, keyword);
   try {
     const blob = await fetchClipBlob(item);
     const url = URL.createObjectURL(blob);
@@ -507,6 +633,20 @@ async function downloadMedia(item, seq, total) {
     // Last resort — open the file in a new tab so the user can still save it by hand.
     window.open(item.download, "_blank");
   }
+}
+
+// When a scene's clips get replaced — Shuffle, Regenerate, an edited keyword, a
+// switch to portrait — anything already ticked used to disappear from the grid
+// while quietly staying in the download list. The bar would say "2 clips
+// selected" with nothing ticked on screen, and those two files came out of the
+// ZIP with no scene number on them. So instead of dropping picks, we carry them
+// over: your ticked clips stay at the front of the new set, still ticked, still
+// visible. Nothing is lost by looking around.
+function mergeKeepingPicks(prevResults, nextResults, selected) {
+  const kept = (prevResults || []).filter((r) => selected[r.id]);
+  if (!kept.length) return nextResults;
+  const keptIds = new Set(kept.map((r) => r.id));
+  return [...kept, ...(nextResults || []).filter((r) => !keptIds.has(r.id))];
 }
 
 /* ---- validation ---- */
@@ -540,9 +680,57 @@ async function loadSettings() {
   } catch {}
   return null;
 }
+// Merge, never overwrite. A caller that only knows about some of the settings —
+// the setup wizard, for instance — used to blank out every field it forgot to
+// mention. Now whatever isn't passed simply stays as it was.
 async function persist(s) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(s));
+    let prev = {};
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) prev = JSON.parse(raw) || {};
+    } catch {}
+    localStorage.setItem(KEY, JSON.stringify({ ...prev, ...s }));
+  } catch {}
+}
+
+// The workspace — the script and the scenes it produced — lives under its own key
+// so a refresh, a closed tab or a crash never costs you a run. Deliberately kept
+// apart from the settings above: settings are tiny and always fit, a workspace can
+// be a few hundred KB, so a storage failure on one must not take the other down.
+const WORK_KEY = "ff_work_v1";
+function loadWork() {
+  try {
+    const raw = localStorage.getItem(WORK_KEY);
+    if (!raw) return null;
+    const w = JSON.parse(raw);
+    if (!w || !Array.isArray(w.scenes)) return null;
+    // A workspace saved mid-run would come back with cards stuck on "Finding
+    // footage..." forever, because the run that would have finished them is gone.
+    // Land every scene as settled instead. `results` is forced to an array in the
+    // same pass: everything downstream calls .map and .filter on it, so one
+    // truncated or half-written save would otherwise blank the whole page.
+    w.scenes = w.scenes.map((s) => ({ ...s, loading: false, results: Array.isArray(s.results) ? s.results : [] }));
+    return w;
+  } catch {}
+  return null;
+}
+function persistWork(w) {
+  try {
+    localStorage.setItem(WORK_KEY, JSON.stringify(w));
+  } catch {
+    // Almost always the ~5 MB browser quota on a very long run. Drop the previous
+    // copy to free its space and try once more; if it still won't fit, carry on
+    // without saving rather than breaking the run in progress.
+    try {
+      localStorage.removeItem(WORK_KEY);
+      localStorage.setItem(WORK_KEY, JSON.stringify(w));
+    } catch {}
+  }
+}
+function clearWork() {
+  try {
+    localStorage.removeItem(WORK_KEY);
   } catch {}
 }
 
@@ -572,6 +760,29 @@ function Label({ children }) {
     <div style={{ ...mono, color: C.muted, letterSpacing: "0.12em" }} className="text-[10px] uppercase mb-2">
       {children}
     </div>
+  );
+}
+
+/* The search box on a scene holds what you are typing to itself, and only hands
+   it up to the page when you commit it — Enter, Escape, or clicking away.
+
+   It used to write every single character straight into the main screen, which
+   re-drew every scene and every thumbnail on the page. Measured on a 100-scene
+   script: 215ms per keystroke, 852ms on the first one, so a word typed at normal
+   speed landed about a second and a half late. Keeping the half-typed text down
+   here costs nothing, and the page above it stays still. */
+function KeywordInput({ value, onCommit }) {
+  const [draft, setDraft] = useState(value);
+  return (
+    <input
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => onCommit(draft)}
+      onKeyDown={(e) => { if (e.key === "Enter") onCommit(draft); if (e.key === "Escape") onCommit(""); }}
+      style={{ ...mono, backgroundColor: C.card, border: `1px solid ${C.brown}`, color: C.inkSoft }}
+      className="text-[11px] px-2 py-0.5 rounded outline-none w-64 max-w-full"
+    />
   );
 }
 
@@ -622,8 +833,25 @@ function FootageFinder() {
   const [dismissWarn, setDismissWarn] = useState(false); // long-script heads-up dismissed?
   const [sceneBusy, setSceneBusy] = useState({});
   const [editing, setEditing] = useState(null);
-  const [editVal, setEditVal] = useState("");
   const [playing, setPlaying] = useState(null);
+
+  // Escape closes the full-screen player. Clicking the dark surround already
+  // closed it, but Escape is what everyone's hands reach for first, and on a
+  // big clip there may be barely any surround left to click.
+  useEffect(() => {
+    if (!playing) return;
+    const onKey = (e) => { if (e.key === "Escape") setPlaying(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playing]);
+
+  // "is anything actually happening?" — a countdown plus a rotating fun fact, so a
+  // long run never looks frozen. startedAt/now are timestamps (not a tick counter)
+  // so elapsed time stays correct even if a render is skipped.
+  const [factIdx, setFactIdx] = useState(0);
+  const [etaSec, setEtaSec] = useState(null);
+  const [startedAt, setStartedAt] = useState(0);
+  const [now, setNow] = useState(0);
 
   /* boot */
   useEffect(() => {
@@ -644,11 +872,62 @@ function FootageFinder() {
         setPerScene(s.perScene === 2 ? 2 : 4);
         setStage("app");
         setReturning(true);
-        setStatus("Welcome back. Paste a new script and hit Analyse.");
+
+        // Bring the last workspace back. This is what makes a refresh survivable:
+        // the script, the scenes and which clips were ticked all return exactly as
+        // they were, so you never re-paste and re-run just because a tab reloaded.
+        const w = loadWork();
+        const n = w ? w.scenes.length : 0;
+        if (w && (w.script || n)) {
+          setScript(w.script || "");
+          setScenes(w.scenes);
+          setSelected(w.selected || {});
+        }
+        setStatus(
+          n
+            ? `Welcome back — your last run is still here (${n} scene${n === 1 ? "" : "s"}). Analyse again to start over.`
+            : w && w.script
+            ? "Welcome back — your script is still here. Hit Analyse when you're ready."
+            : "Welcome back. Paste a new script and hit Analyse."
+        );
       }
       setBooted(true);
     })();
   }, []);
+
+  // Save the workspace whenever it settles. The debounce does double duty: it keeps
+  // typing from writing on every keystroke, and because phase 2 repaints the scene
+  // list every 400 ms it also means a long run writes once at the end instead of a
+  // hundred times mid-flight. `loading` is stripped on the way in and out.
+  useEffect(() => {
+    if (!booted) return;
+    const t = setTimeout(() => {
+      if (!script.trim() && scenes.length === 0) {
+        clearWork();
+        return;
+      }
+      persistWork({
+        script,
+        scenes: scenes.map((s) => ({ ...s, loading: false })),
+        selected,
+        savedAt: Date.now(),
+      });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [booted, script, scenes, selected]);
+
+  // While a run is in flight: tick the clock every second (that's what makes the
+  // countdown move) and rotate the fun fact every 7 seconds. Both intervals only
+  // exist while analysing, so an idle page does no work at all.
+  useEffect(() => {
+    if (!analyzing) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    const f = setInterval(() => setFactIdx((n) => (n + 1) % FACTS.length), 7000);
+    return () => {
+      clearInterval(t);
+      clearInterval(f);
+    };
+  }, [analyzing]);
 
   const saveAll = (extra = {}) =>
     persist({ toolName, creator, pexelsKey, pexelsKey2, pexelsKey3, pixabayKey, pixabayKey2, pixabayKey3, mediaTypes, sources, orientation, perScene, ...extra });
@@ -674,6 +953,16 @@ function FootageFinder() {
 
   const selectedCount = Object.keys(selected).length;
 
+  // Countdown text under the progress bar. Falls back to a plain elapsed counter if
+  // we never got an estimate, so it always says something truthful.
+  const elapsedSec = startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : 0;
+  const etaLabel = (() => {
+    if (!etaSec) return `Working... ${fmtDuration(elapsedSec)} elapsed`;
+    const left = etaSec - elapsedSec;
+    if (left <= 0) return `Almost there — ${fmtDuration(elapsedSec)} elapsed`;
+    return `About ${fmtDuration(left)} left · ${fmtDuration(elapsedSec)} elapsed`;
+  })();
+
   /* analysis */
   async function runAnalysis() {
     if (!script.trim()) {
@@ -690,6 +979,13 @@ function FootageFinder() {
     setStatusErr(false);
     setScenes([]);
     setSelected({});
+    // Start the clock and show a first estimate straight away, guessed from the
+    // sentence count. It gets replaced with the real one the moment the AI has
+    // split the script — but the user sees a number immediately either way.
+    setStartedAt(Date.now());
+    setNow(Date.now());
+    setFactIdx(0);
+    setEtaSec(estimateSeconds({ sceneCount: Math.max(1, (splitIntoScenes(script) || []).length) }));
     try {
       // Break the script into filmable beats via the AI (one action per scene).
       // Fall back to the coarse sentence splitter if that step fails for any reason.
@@ -701,32 +997,91 @@ function FootageFinder() {
       } catch {
         lines = splitIntoScenes(script);
       }
+      // Now we know the real scene count, so re-estimate against it.
+      setEtaSec(estimateSeconds({ sceneCount: lines.length }));
       // phase 1 — keywords in batches (full context)
-      // 10 scenes per call: fewer round-trips = much faster on long scripts. The
-      // FULL script still rides along in every call, so context/drift is unchanged.
-      const size = 10;
+      // KEYWORD_BATCH scenes per call: fewer round-trips = much faster on long
+      // scripts. The FULL script still rides along in every call, so context and
+      // drift are unchanged.
+      const size = KEYWORD_BATCH;
       const batches = [];
       for (let i = 0; i < lines.length; i += size) batches.push(lines.slice(i, i + size));
-      let keywords = [];
-      for (let b = 0; b < batches.length; b++) {
-        setProgress({ pct: ((b) / batches.length) * 35, label: `Analysing batch ${b + 1}/${batches.length} with full context...` });
-        keywords = keywords.concat(await generateKeywords(script, batches[b]));
-      }
+      // All batches go out at once. That sounds reckless, but throttleGemini
+      // still holds every call GEMINI_MIN_GAP_MS apart, so this uses exactly the
+      // same number of requests at exactly the same rate as the old one-at-a-time
+      // loop — it just stops waiting for each reply before sending the next.
+      let doneBatches = 0;
+      setProgress({ pct: 6, label: `Analysing ${batches.length} batch${batches.length === 1 ? "" : "es"} with full context...` });
+      const settledBatches = await Promise.allSettled(
+        batches.map((b) =>
+          generateKeywords(script, b).then((r) => {
+            doneBatches++;
+            setProgress({ pct: 6 + (doneBatches / batches.length) * 29, label: `Keywords: batch ${doneBatches}/${batches.length} done...` });
+            return r;
+          })
+        )
+      );
+      // allSettled keeps the original order, so keywords[i] still lines up with
+      // lines[i]. If any batch genuinely failed, fail the run like before.
+      const failed = settledBatches.find((s) => s.status === "rejected");
+      if (failed) throw failed.reason;
+      const keywords = settledBatches.flatMap((s) => s.value);
       // phase 2 — search each scene
-      const acc = [];
-      let rateHit = false;
-      for (let i = 0; i < lines.length; i++) {
-        const kw = keywords[i];
-        setProgress({ pct: 35 + ((i + 1) / lines.length) * 65, label: `Scene ${i + 1}/${lines.length} → "${kw}"` });
-        let results = [];
-        try {
-          results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation, perPage: perScene, page: 1 });
-        } catch (err) {
-          if (err.message === "PEXELS_RATE") rateHit = true; // keep going, just no results for this scene
-          else throw err; // real errors (auth, Claude) still abort
+      // Every card is put on screen straight away with its line and its keyword,
+      // so you can read the whole shot list while the clips are still arriving.
+      // SCENE_POOL scenes are searched at once instead of one at a time, which is
+      // the single biggest speed win in the tool — same number of requests, just
+      // not standing in a queue. The ids carry a per-run stamp so an inserted
+      // scene can never collide with one from an earlier run.
+      const runId = Date.now().toString(36);
+      const acc = lines.map((line, i) => ({
+        id: `sc-${runId}-${i}`,
+        line,
+        keyword: keywords[i],
+        page: 1,
+        results: [],
+        orientation,
+        perScene,
+        loading: true,
+      }));
+      setScenes(acc.map((s) => ({ ...s })));
+      let rateHit = false, finished = 0, dirty = false;
+      // Redraw at most a few times a second rather than once per finished scene:
+      // with 100 scenes that's the difference between a smooth fill and a stutter.
+      const flush = () => {
+        if (dirty) {
+          dirty = false;
+          setScenes(acc.map((s) => ({ ...s })));
         }
-        acc.push({ id: "sc-" + i, line: lines[i], keyword: kw, page: 1, results, orientation, perScene });
-        setScenes([...acc]);
+      };
+      const flushTimer = setInterval(flush, 400);
+      try {
+        let cursor = 0;
+        const worker = async () => {
+          for (;;) {
+            const i = cursor++;
+            if (i >= acc.length) return;
+            try {
+              acc[i].results = await searchScene(keywords[i], { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation, perPage: perScene, page: 1 });
+            } catch (err) {
+              if (err.message === "PEXELS_RATE") rateHit = true; // keep going, just no results for this scene
+              else throw err; // real errors (auth, Claude) still abort
+            }
+            acc[i].loading = false;
+            dirty = true;
+            finished++;
+            setProgress({ pct: 35 + (finished / acc.length) * 65, label: `Finding footage — ${finished}/${acc.length} scenes done` });
+          }
+        };
+        const settled = await Promise.allSettled(
+          Array.from({ length: Math.min(SCENE_POOL, acc.length) }, worker)
+        );
+        const bad = settled.find((s) => s.status === "rejected");
+        if (bad) throw bad.reason;
+      } finally {
+        clearInterval(flushTimer);
+        dirty = true;
+        flush();
       }
       const total = acc.reduce((n, s) => n + s.results.length, 0);
       if (rateHit) {
@@ -760,11 +1115,12 @@ function FootageFinder() {
   }
 
   async function shuffleScene(s) {
+    if (!s.keyword || !s.keyword.trim()) return; // nothing to search yet
     setBusy(s.id, true);
     try {
       const page = (s.page || 1) + 1;
       const results = await searchScene(s.keyword, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page });
-      updateScene(s.id, { results: results.length ? results : s.results, page });
+      updateScene(s.id, { results: results.length ? mergeKeepingPicks(s.results, results, selected) : s.results, page });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
@@ -773,17 +1129,23 @@ function FootageFinder() {
     try {
       const kw = await regenKeyword(script, s.line, s.keyword);
       const results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page: 1 });
-      updateScene(s.id, { keyword: kw, results, page: 1 });
+      updateScene(s.id, { keyword: kw, results: mergeKeepingPicks(s.results, results, selected), page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
   async function applyKeyword(s, kw) {
     setEditing(null);
-    if (!kw.trim() || kw === s.keyword) return;
+    // An inserted "+" scene that never got a search typed into it is just an empty
+    // card — drop it rather than leave a dead row behind.
+    if (!kw.trim()) {
+      if (s.inserted && !s.keyword) removeScene(s.id);
+      return;
+    }
+    if (kw === s.keyword) return;
     setBusy(s.id, true);
     try {
       const results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page: 1 });
-      updateScene(s.id, { keyword: kw, results, page: 1 });
+      updateScene(s.id, { keyword: kw, results: mergeKeepingPicks(s.results, results, selected), page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
@@ -792,10 +1154,11 @@ function FootageFinder() {
   async function setSceneOrientation(s, next) {
     if ((s.orientation || orientation) === next) return;
     updateScene(s.id, { orientation: next }); // reshape tiles immediately
+    if (!s.keyword || !s.keyword.trim()) return; // nothing to re-search yet
     setBusy(s.id, true);
     try {
       const results = await searchScene(s.keyword, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: next, perPage: s.perScene || perScene, page: 1 });
-      updateScene(s.id, { results: results.length ? results : s.results, page: 1 });
+      updateScene(s.id, { results: results.length ? mergeKeepingPicks(s.results, results, selected) : s.results, page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
@@ -815,14 +1178,89 @@ function FootageFinder() {
       return n;
     });
 
+  // Drop a scene from the list. Any of its clips you had ticked go with it —
+  // otherwise the download bar keeps counting footage you can no longer see.
+  function removeScene(id) {
+    const gone = scenes.find((s) => s.id === id);
+    if (gone && gone.results.length) clearScene(gone);
+    setScenes((list) => list.filter((s) => s.id !== id));
+  }
+
+  // The "+" seams. Inserting mints a scene of its own with a blank search and opens
+  // the editor on it in the same motion, so one click and you're already typing.
+  // Scene numbers are positional, so everything below it renumbers itself.
+  function insertScene(at) {
+    const id = `sc-add-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    setScenes((list) => {
+      const next = list.slice();
+      next.splice(at, 0, {
+        id,
+        line: "Extra search — added by you",
+        keyword: "",
+        page: 1,
+        results: [],
+        orientation,
+        perScene,
+        loading: false,
+        inserted: true, // marks it as yours, not the AI's — see the scene head
+      });
+      return next;
+    });
+    setEditing(id);
+  }
+
+  // Sits between every pair of scenes and once at the end. Deliberately quiet — a
+  // dashed seam that lights up under the cursor — so a hundred of them down a long
+  // script read as hairlines rather than clutter. On touch there is no cursor to
+  // light it up, so the ff-seam rules bring it most of the way out and fatten it.
+  const plusRow = (at) => (
+    <button
+      onClick={() => insertScene(at)}
+      title="Insert an extra search here"
+      style={{ ...mono }}
+      className="ff-seam w-full flex items-center gap-2 opacity-30 hover:opacity-100 transition-opacity"
+    >
+      <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
+      <span
+        style={{ border: `1px dashed ${C.line}`, backgroundColor: C.card, color: C.brown }}
+        className="ff-chip inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] uppercase tracking-wide"
+      >
+        <Plus size={10} /> Add a search
+      </span>
+      <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
+    </button>
+  );
+
+  // Your picks, walked in script order rather than in the order you happened to
+  // click them — so file numbers and the shot list read top-to-bottom like the
+  // timeline. Each pick carries the scene it came from and that scene's search
+  // words, which become part of the filename. Anything that has somehow lost its
+  // scene goes last with a number of its own instead of coming out unnumbered.
+  function orderedPicks() {
+    const out = [];
+    const seen = new Set();
+    scenes.forEach((s, i) => {
+      s.results.forEach((r) => {
+        if (selected[r.id] && !seen.has(r.id)) {
+          seen.add(r.id);
+          out.push({ item: selected[r.id], seq: i + 1, keyword: s.keyword });
+        }
+      });
+    });
+    Object.values(selected).forEach((it) => {
+      if (!seen.has(it.id)) {
+        seen.add(it.id);
+        out.push({ item: it, seq: scenes.length + 1, keyword: "" });
+      }
+    });
+    return out;
+  }
+
   async function downloadAll() {
-    const items = Object.values(selected);
-    // Map every result id to its scene number (1-based) so each downloaded file
-    // is prefixed with the scene it belongs to and imports in timeline order.
-    const sceneOf = {};
-    scenes.forEach((s, i) => s.results.forEach((r) => { sceneOf[r.id] = i + 1; }));
-    for (const it of items) {
-      await downloadMedia(it, sceneOf[it.id], scenes.length);
+    const picks = orderedPicks();
+    const total = scenes.length;
+    for (const p of picks) {
+      await downloadMedia(p.item, p.seq, total, p.keyword);
       await new Promise((r) => setTimeout(r, 600));
     }
   }
@@ -831,28 +1269,26 @@ function FootageFinder() {
   // Fetches each file's bytes (Pexels direct, Pixabay via the proxy), skipping any
   // that fail rather than aborting the whole batch, and reports how many made it.
   async function downloadZip() {
-    const items = Object.values(selected);
-    if (!items.length) return;
-    const sceneOf = {};
-    scenes.forEach((s, i) => s.results.forEach((r) => { sceneOf[r.id] = i + 1; }));
-    setZipping({ done: 0, total: items.length });
+    const picks = orderedPicks();
+    if (!picks.length) return;
+    setZipping({ done: 0, total: picks.length });
     try {
       const JSZip = await loadJSZip();
       const zip = new JSZip();
       const used = {};
       let ok = 0, failed = 0;
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
+      for (let i = 0; i < picks.length; i++) {
+        const it = picks[i].item;
         try {
           const blob = await fetchClipBlob(it);
-          let name = clipFileName(it, sceneOf[it.id], scenes.length);
+          let name = clipFileName(it, picks[i].seq, scenes.length, picks[i].keyword);
           // Guard against two clips resolving to the same filename inside the zip.
-          if (used[name]) name = name.replace(/(\.[a-z0-9]+)$/i, `_${String(it.id).replace(/[^a-z0-9]+/gi, "")}$1`);
+          if (used[name]) name = name.replace(/(\.[a-z0-9]+)$/i, `_${i + 1}$1`);
           used[name] = 1;
           zip.file(name, blob);
           ok++;
         } catch { failed++; }
-        setZipping({ done: i + 1, total: items.length });
+        setZipping({ done: i + 1, total: picks.length });
       }
       if (!ok) {
         setStatus("Couldn't fetch any of the selected clips to zip — check your connection, or use Files to save them one by one.");
@@ -860,7 +1296,7 @@ function FootageFinder() {
         return;
       }
       const out = await zip.generateAsync({ type: "blob" }, (meta) => {
-        setZipping({ done: items.length, total: items.length, packing: Math.round(meta.percent) });
+        setZipping({ done: picks.length, total: picks.length, packing: Math.round(meta.percent) });
       });
       const url = URL.createObjectURL(out);
       const a = document.createElement("a");
@@ -896,8 +1332,10 @@ function FootageFinder() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${toolName.replace(/[^a-z0-9]+/gi, "_")}_shotlist.txt`;
+    a.download = `${(toolName || "footage").replace(/[^a-z0-9]+/gi, "_")}_shotlist.txt`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
@@ -932,6 +1370,11 @@ function FootageFinder() {
             pixabayKey: d.pixabayKey, pixabayKey2: d.pixabayKey2, pixabayKey3: d.pixabayKey3,
             mediaTypes,
             sources: nextSources,
+            // Settings used to leave these two out, which silently reset your
+            // orientation and clips-per-scene back to the defaults the next time
+            // you refreshed — invisible until a run came back twice the size.
+            orientation,
+            perScene,
           });
           setStage("app");
           setStatus("All set. Paste your script and hit Analyse.");
@@ -945,9 +1388,13 @@ function FootageFinder() {
       <style>{`
         .ff-card{background:${C.card};border:1px solid ${C.line};}
         .ff-tile img{transition:transform .35s ease;}
-        .ff-tile:hover img{transform:scale(1.05);}
         .ff-scroll::-webkit-scrollbar{height:8px;width:8px}
         .ff-scroll::-webkit-scrollbar-thumb{background:${C.line};border-radius:8px}
+
+        /* Everything that doesn't need a theme colour — including every rule
+           that makes the tool usable on a phone — lives in index.html's
+           <style> instead, because this block is inside the main screen and
+           so never reaches the first-run setup wizard. */
       `}</style>
 
       <div className="max-w-5xl mx-auto px-5 sm:px-8 pt-8 pb-32">
@@ -1006,7 +1453,7 @@ function FootageFinder() {
           <textarea
             value={script}
             onChange={(e) => { setScript(e.target.value); if (!e.target.value.trim()) setDismissWarn(false); }}
-            placeholder="Paste your YouTube script here. Each sentence is read in context — Claude understands the scene before and after each line to find footage that fits the exact moment, not just the words..."
+            placeholder="Paste your YouTube script here. Each sentence is read in context — the AI sees the line before and after to find footage that fits the exact moment, not just the words..."
             style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, color: C.ink, ...sans }}
             className="w-full h-44 rounded-lg p-4 text-[14px] leading-relaxed resize-y outline-none focus:border-amber-700"
           />
@@ -1049,25 +1496,41 @@ function FootageFinder() {
             </div>
           </div>
 
-          {/* Heads-up shown ONLY when 4 clips/scene is picked. Honest framing: clip
-              count does NOT affect the hourly limit (that counts searches = scenes),
-              it just doubles how much footage each scene loads + how big the ZIP is. */}
-          {perScene === 4 && (
-            <div style={{ ...mono, color: C.muted }} className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed">
-              <Info size={12} className="mt-[1px] flex-shrink-0" />
-              <span>
-                4 clips per scene loads twice as much footage. You get more to choose from, but
-                each scene loads slower and ZIP downloads are bigger. Pick 2 for faster, lighter runs.
-              </span>
-            </div>
-          )}
+          {/* What "2" and "4" really mean. The number is per media type per site,
+              so with videos + photos both on you get double it, and with both
+              sites on you get double again — which is why a scene set to "2" can
+              come back with eight thumbnails. Rather than quietly dividing the
+              number (Pixabay refuses a page size under 3), the setting says out
+              loud what it's about to fetch. Clip count does NOT affect the hourly
+              limit — that counts searches, i.e. scenes. */}
+          {(() => {
+            const typeCount = (mediaTypes.videos ? 1 : 0) + (mediaTypes.photos ? 1 : 0);
+            const srcCount = (sources.pexels ? 1 : 0) + (sources.pixabay ? 1 : 0);
+            const per = perScene * Math.max(1, typeCount) * Math.max(1, srcCount);
+            const bits = [];
+            if (mediaTypes.videos && mediaTypes.photos) bits.push("videos and photos");
+            else if (mediaTypes.videos) bits.push("videos");
+            else if (mediaTypes.photos) bits.push("photos");
+            const sites = [sources.pexels && "Pexels", sources.pixabay && "Pixabay"].filter(Boolean).join(" and ");
+            return (
+              <div style={{ ...mono, color: C.muted }} className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed">
+                <Info size={12} className="mt-[1px] flex-shrink-0" />
+                <span>
+                  {per} clips per scene as things stand — it's {perScene} of each kind from each site,
+                  and you have {bits.join("")}{sites ? " from " + sites : ""} switched on. More to choose
+                  from, but each scene loads slower and ZIPs get bigger. This doesn't touch your hourly
+                  limit; that counts scenes, not clips.
+                </span>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Long-script heads-up: appears ONLY when the pasted script is big enough
             to risk the hourly limit (rough sentence count — the real quota driver
             is number of scenes, NOT the clips-per-scene setting). Dismissible. */}
         {(() => {
-          const sentences = (script.match(/[^.!?]+[.!?]+/g) || []).length;
+          const sentences = (splitIntoScenes(script) || []).length;
           if (sentences < 60 || dismissWarn || analyzing) return null;
           return (
             <div style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, borderLeft: "3px solid #b8862b" }} className="mt-6 rounded-md px-4 py-3 flex items-start gap-2.5">
@@ -1083,6 +1546,23 @@ function FootageFinder() {
                 </div>
               </div>
               <button onClick={() => setDismissWarn(true)} style={{ ...mono, color: C.muted }} className="text-[10px] px-2 py-1 rounded hover:bg-black/5 flex-shrink-0">Got it</button>
+            </div>
+          );
+        })()}
+
+        {/* What you're about to set off, before you set it off. The scene count and
+            the clock used to appear only once the run was already under way, so
+            there was no way to tell a 40-second job from a six-minute one until you
+            were committed. Same two functions the run itself uses, so the number
+            here is the number the countdown starts on. The AI may merge or split a
+            beat or two, hence "about". */}
+        {(() => {
+          if (analyzing || !script.trim()) return null;
+          const n = Math.max(1, (splitIntoScenes(script) || []).length);
+          return (
+            <div style={{ ...mono, color: C.muted }} className="mt-5 flex items-center justify-center gap-2 text-[11px]">
+              <Film size={12} className="flex-shrink-0" />
+              <span>About {n} {n === 1 ? "scene" : "scenes"} · roughly {fmtDuration(estimateSeconds({ sceneCount: n }))} to find footage for all of them</span>
             </div>
           );
         })()}
@@ -1115,6 +1595,18 @@ function FootageFinder() {
               <div style={{ width: `${progress.pct}%`, backgroundColor: C.brown }} className="h-full transition-all duration-300" />
             </div>
           )}
+          {/* countdown + a rotating fact, so a long run never looks frozen */}
+          {analyzing && (
+            <div className="mt-2.5">
+              <div style={{ ...mono, color: C.muted }} className="text-[10px]">{etaLabel}</div>
+              {/* key={factIdx} on purpose: it makes React swap the element out for a
+                  new one each time the fact changes, which restarts the ff-fact fade
+                  so one line dissolves into the next instead of snapping over. */}
+              <div key={factIdx} style={{ ...serif, color: C.inkSoft }} className="ff-fact text-[11.5px] italic mt-1.5 leading-snug">
+                {FACTS[factIdx % FACTS.length]}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* stats */}
@@ -1139,33 +1631,27 @@ function FootageFinder() {
           {scenes.map((s, i) => {
             const busy = sceneBusy[s.id];
             return (
-              <div key={s.id} style={{ backgroundColor: C.cardAlt, border: `1px solid ${C.line}` }} className="rounded-lg overflow-hidden">
+              <React.Fragment key={s.id}>
+              {plusRow(i)}
+              <div style={{ backgroundColor: C.cardAlt, border: `1px solid ${C.line}` }} className="ff-scene rounded-lg overflow-hidden">
                 {/* scene head */}
                 <div className="px-4 pt-3.5 pb-3">
-                  <div className="flex items-start gap-3">
+                  <div className="ff-head flex items-start gap-3">
                     <span style={{ ...mono, color: C.brown }} className="text-[12px] font-bold pt-0.5">{String(i + 1).padStart(2, "0")}</span>
                     <div className="flex-1 min-w-0">
-                      <div style={{ color: C.ink }} className="text-[14px] leading-snug">{s.line}</div>
+                      <div style={{ color: s.inserted ? C.muted : C.ink, fontStyle: s.inserted ? "italic" : "normal" }} className="text-[14px] leading-snug">{s.line}</div>
                       <div className="flex items-center gap-2 mt-1.5">
                         <span style={{ color: C.muted }}>→</span>
                         {editing === s.id ? (
-                          <input
-                            autoFocus
-                            value={editVal}
-                            onChange={(e) => setEditVal(e.target.value)}
-                            onBlur={() => applyKeyword(s, editVal)}
-                            onKeyDown={(e) => { if (e.key === "Enter") applyKeyword(s, editVal); if (e.key === "Escape") setEditing(null); }}
-                            style={{ ...mono, backgroundColor: C.card, border: `1px solid ${C.brown}`, color: C.inkSoft }}
-                            className="text-[11px] px-2 py-0.5 rounded outline-none w-64 max-w-full"
-                          />
+                          <KeywordInput value={s.keyword} onCommit={(kw) => applyKeyword(s, kw)} />
                         ) : (
                           <button
-                            onClick={() => { setEditing(s.id); setEditVal(s.keyword); }}
+                            onClick={() => setEditing(s.id)}
                             style={{ ...mono, color: C.inkSoft }}
                             className="text-[11px] inline-flex items-center gap-1.5 group"
                             title="Click to edit this search"
                           >
-                            "{s.keyword}"
+                            {s.keyword ? `"${s.keyword}"` : "type your search here"}
                             <span
                               style={{ color: C.brown, border: `1px solid ${C.line}`, backgroundColor: C.card }}
                               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide group-hover:opacity-80"
@@ -1176,7 +1662,7 @@ function FootageFinder() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="ff-tools flex items-center gap-1.5">
                       {(() => { const ori = s.orientation || orientation; return (
                         <div style={{ border: `1px solid ${C.line}`, backgroundColor: C.card }} className="flex rounded overflow-hidden mr-0.5">
                           <button onClick={() => setSceneOrientation(s, "landscape")} disabled={busy} title="Landscape footage for this scene" style={{ backgroundColor: ori === "landscape" ? C.brown : "transparent", color: ori === "landscape" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Monitor size={13} /></button>
@@ -1184,7 +1670,13 @@ function FootageFinder() {
                         </div>
                       ); })()}
                       <button onClick={() => shuffleScene(s)} disabled={busy} title="Shuffle — new results, same search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Shuffle size={13} /></button>
-                      <button onClick={() => regenScene(s)} disabled={busy} title="Regenerate — new AI search angle" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><RefreshCw size={13} className={busy ? "animate-spin" : ""} /></button>
+                      {s.inserted ? (
+                        // This one's yours, not the AI's. There's no script line behind it
+                        // to spin a fresh angle from, so the slot removes it instead.
+                        <button onClick={() => removeScene(s.id)} disabled={busy} title="Remove this extra search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Trash2 size={13} /></button>
+                      ) : (
+                        <button onClick={() => regenScene(s)} disabled={busy} title="Regenerate — new AI search angle" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><RefreshCw size={13} className={busy ? "animate-spin" : ""} /></button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1197,7 +1689,22 @@ function FootageFinder() {
                     </div>
                   )}
                   {s.results.length === 0 ? (
-                    <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">No results — try Shuffle or Regenerate.</div>
+                    // A card that's still waiting its turn says so, instead of
+                    // wrongly telling you there's nothing to find.
+                    s.loading ? (
+                      <div style={{ ...mono, color: C.muted }} className="ff-pending text-[11px] py-6 text-center flex items-center justify-center gap-2">
+                        <Loader2 className="animate-spin" size={13} /> Finding footage...
+                      </div>
+                    ) : !s.keyword || !s.keyword.trim() ? (
+                      // A row you added yourself, before you've typed anything into
+                      // it. Telling this one to "try Regenerate" would be useless —
+                      // it has no Regenerate button, and nothing to rewrite.
+                      <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">Type what you want to see above, then press Enter.</div>
+                    ) : s.inserted ? (
+                      <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">Nothing found for that. Click the words above to edit them, or try Shuffle.</div>
+                    ) : (
+                      <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">No results — try Shuffle or Regenerate.</div>
+                    )
                   ) : (
                     // Always the neat responsive grid — 2 columns on phones, 4 on
                     // desktop — no matter the clips-per-scene setting. (It used to
@@ -1211,6 +1718,7 @@ function FootageFinder() {
                           <div
                             key={r.id}
                             onClick={() => toggleSel(r)}
+                            title={sel ? "Picked for your download list — click to un-pick" : "Click the picture to pick this clip for your download list"}
                             onMouseEnter={(e) => {
                               const v = e.currentTarget.querySelector("video");
                               if (!v) return;
@@ -1269,21 +1777,23 @@ function FootageFinder() {
                                 <Check size={10} color="#fff" />
                               </span>
                             )}
-                            {/* hover overlay — buttons only; the tile itself previews on hover */}
-                            <div style={{ background: "linear-gradient(to top, rgba(57,39,26,0.92), rgba(57,39,26,0.15) 55%, transparent)" }} className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end pointer-events-none">
-                              <div className="p-2 pointer-events-auto">
-                                <div style={{ ...mono }} className="text-[8px] text-white/85 mb-1 truncate">{r.label}</div>
+                            {/* Action bar. On a mouse it fades in on hover; on a touch screen
+                                the ff-* classes above pin it open and shrink it to icons, since
+                                there is no hover to reveal it and no room for three labels. */}
+                            <div style={{ background: "linear-gradient(to top, rgba(57,39,26,0.92), rgba(57,39,26,0.15) 55%, transparent)" }} className="ff-actions absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end pointer-events-none">
+                              <div className="ff-bar p-2">
+                                <div style={{ ...mono }} className="ff-src text-[8px] text-white/85 mb-1 truncate">{r.label}</div>
                                 <div className="flex items-center gap-1.5">
                                   {r.type === "video" && r.preview && (
-                                    <button onClick={(e) => { e.stopPropagation(); setPlaying({ ...r, _seq: i + 1, _total: scenes.length }); }} title="Play full preview with sound" style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                                      <Play size={9} /> Sound
+                                    <button onClick={(e) => { e.stopPropagation(); setPlaying({ ...r, _seq: i + 1, _total: scenes.length, _kw: s.keyword }); }} title="Expand — watch the full clip, big, with sound" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                      <Play size={9} /> <span className="ff-lbl">Expand</span>
                                     </button>
                                   )}
-                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length); }} style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                                    <Download size={9} /> Save
+                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length, s.keyword); }} title="Download — save this one clip to your computer now (this is not how you pick it — click the picture for that)" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                    <Download size={9} /> <span className="ff-lbl">Download</span>
                                   </button>
-                                  <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} style={{ ...mono }} className="flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                                    <ExternalLink size={9} /> View
+                                  <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="View — open the original page in a new tab" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                    <ExternalLink size={9} /> <span className="ff-lbl">View</span>
                                   </button>
                                 </div>
                               </div>
@@ -1298,21 +1808,23 @@ function FootageFinder() {
                 {/* scene foot */}
                 <div style={{ borderTop: `1px solid ${C.line}` }} className="px-4 py-2 flex items-center justify-between">
                   <span style={{ ...mono, color: C.muted }} className="text-[10px]">{s.results.length} results</span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="ff-foot flex items-center gap-1.5">
                     <button onClick={() => selectAll(s)} style={{ ...mono, border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="text-[10px] px-2.5 py-1 rounded hover:opacity-80">Select all</button>
                     <button onClick={() => clearScene(s)} style={{ ...mono, border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="text-[10px] px-2.5 py-1 rounded hover:opacity-80">Clear</button>
                   </div>
                 </div>
               </div>
+              </React.Fragment>
             );
           })}
+          {scenes.length > 0 && plusRow(scenes.length)}
         </div>
       </div>
 
       {/* selected bar */}
       {selectedCount > 0 && (
-        <div style={{ backgroundColor: C.brownDark }} className="fixed bottom-0 left-0 right-0 z-30 shadow-2xl">
-          <div className="max-w-5xl mx-auto px-5 sm:px-8 py-3 flex items-center justify-between gap-3">
+        <div style={{ backgroundColor: C.brownDark }} className="ff-dlbar fixed bottom-0 left-0 right-0 z-30 shadow-2xl">
+          <div className="ff-dl max-w-5xl mx-auto px-5 sm:px-8 py-3 flex items-center justify-between gap-3">
             <div style={{ ...mono, color: "#f4ead7" }} className="text-[12px]">
               <span className="font-bold">{selectedCount}</span> clip{selectedCount > 1 ? "s" : ""} selected
             </div>
@@ -1343,15 +1855,15 @@ function FootageFinder() {
 
       {/* video modal */}
       {playing && (
-        <div onClick={() => setPlaying(null)} style={{ backgroundColor: "rgba(28,22,15,0.82)" }} className="fixed inset-0 z-40 flex items-center justify-center p-5">
-          <div onClick={(e) => e.stopPropagation()} className="w-full max-w-2xl">
+        <div onClick={() => setPlaying(null)} style={{ backgroundColor: "rgba(28,22,15,0.82)" }} className="ff-overlay fixed inset-0 z-40 flex items-center justify-center p-5">
+          <div onClick={(e) => e.stopPropagation()} className="ff-modal ff-pop w-full max-w-2xl">
             <video src={playing.preview} controls autoPlay className="w-full rounded-lg bg-black" style={{ maxHeight: "70vh" }} />
             <div className="flex items-center justify-between mt-3">
               <span style={{ ...mono, color: "#f4ead7" }} className="text-[11px]">{playing.label}</span>
               <div className="flex gap-2">
-                <button onClick={() => downloadMedia(playing, playing._seq, playing._total)} style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Save</button>
+                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw)} title="Download — save this clip to your computer" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
                 <button onClick={() => window.open(playing.url, "_blank")} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
-                <button onClick={() => setPlaying(null)} style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
+                <button onClick={() => setPlaying(null)} title="Close (or press Escape)" style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
               </div>
             </div>
           </div>
@@ -1374,13 +1886,17 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
   const [pixabayKey, setPixabayKey] = useState(initial.pixabayKey || "");
   const [pixabayKey2, setPixabayKey2] = useState(initial.pixabayKey2 || "");
   const [pixabayKey3, setPixabayKey3] = useState(initial.pixabayKey3 || "");
-  const [pxState, setPxState] = useState("idle"); // idle|checking|ok|bad
-  const [pbState, setPbState] = useState("idle");
+  // A key that's already saved counts as unverified until proven otherwise, so
+  // it starts as "checking" rather than "idle" — otherwise re-opening Settings
+  // showed a perfectly good key with Continue greyed out, and the only way past
+  // was to delete the key and paste the identical thing back in.
+  const [pxState, setPxState] = useState(initial.pexelsKey ? "checking" : "idle"); // idle|checking|ok|bad
+  const [pbState, setPbState] = useState(initial.pixabayKey ? "checking" : "idle");
 
   const steps = ["Brand", "Free sources", "Ready"];
 
   async function checkPx() {
-    if (!pexelsKey.trim()) return;
+    if (!pexelsKey.trim()) { setPxState("idle"); return; }
     setPxState("checking");
     setPxState((await validatePexels(pexelsKey.trim())) ? "ok" : "bad");
   }
@@ -1389,6 +1905,15 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
     setPbState("checking");
     setPbState((await validatePixabay(pixabayKey.trim())) ? "ok" : "bad");
   }
+
+  // Verify whatever was already saved, once, as the wizard opens. Costs one
+  // request per stored key and means a returning user never has to re-type
+  // anything. If a stored key has genuinely stopped working, it says so here
+  // instead of failing later mid-run.
+  useEffect(() => {
+    if (initial.pexelsKey) checkPx();
+    if (initial.pixabayKey) checkPb();
+  }, []);
 
   const card = { backgroundColor: C.card, border: `1px solid ${C.line}` };
   const inputStyle = { backgroundColor: C.field, border: `1px solid ${C.line}`, color: C.ink, ...sans };
@@ -1422,23 +1947,33 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
         </div>
         <div style={{ ...mono, color: C.muted }} className="text-[11px] mb-6">A one-time setup. Your details are saved on this device.</div>
 
-        {/* stepper */}
+        {/* Stepper. The circles are buttons, not decoration — opening Settings to
+            change one thing shouldn't march you through all three screens from
+            the beginning. Step 3 stays locked until a source key checks out,
+            which is the same gate the Continue button uses. */}
         <div className="flex items-center gap-2 mb-7">
-          {steps.map((label, i) => (
+          {steps.map((label, i) => {
+            const reachable = i === 0 || (i === 1 && !!toolName.trim()) || (i === 2 && !!toolName.trim() && pxState === "ok");
+            return (
             <div key={label} className="flex items-center gap-2 flex-1">
-              <div
+              <button
+                onClick={() => reachable && setStep(i)}
+                disabled={!reachable}
+                title={reachable ? `${i + 1}. ${label}` : `${label} — finish the step before it first`}
                 style={{
                   backgroundColor: i <= step ? C.brown : C.cardAlt,
                   color: i <= step ? "#fff" : C.muted,
                   border: `1px solid ${i <= step ? C.brown : C.line}`,
+                  cursor: reachable ? "pointer" : "default",
                 }}
-                className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0"
+                className="ff-step w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0"
               >
                 {i < step ? <Check size={12} /> : i + 1}
-              </div>
+              </button>
               {i < steps.length - 1 && <div style={{ backgroundColor: i < step ? C.brown : C.line }} className="h-px flex-1" />}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* STEP 0 */}
@@ -1490,7 +2025,10 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             <div className="flex gap-2 mt-7">
               <button onClick={() => setStep(0)} style={{ border: `1px solid ${C.line}`, color: C.inkSoft, backgroundColor: C.card }} className="px-4 py-3 rounded-md text-sm">Back</button>
               <button onClick={() => setStep(2)} disabled={pxState !== "ok"} style={{ backgroundColor: pxState === "ok" ? C.brownDark : "#c3b8a1", color: "#f4ead7" }} className="flex-1 py-3 rounded-md text-sm font-semibold flex items-center justify-center gap-2">
-                {pxState === "ok" ? <>Continue <ArrowRight size={15} /></> : "Verify your Pexels key to continue"}
+                {pxState === "ok" ? <>Continue <ArrowRight size={15} /></>
+                  : pxState === "checking" ? <><Loader2 size={15} className="animate-spin" /> Checking your Pexels key…</>
+                  : pxState === "bad" ? "That Pexels key didn't work — fix it to continue"
+                  : "Paste your Pexels key to continue"}
               </button>
             </div>
           </div>
@@ -1505,7 +2043,10 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">You're all set</h2>
             <p style={{ color: C.inkSoft }} className="text-sm mb-1"><span className="font-semibold">{toolName || "Your tool"}</span> is ready to go.</p>
             <p style={{ color: C.muted, ...mono }} className="text-[11px] mb-7">Tip: bookmark your tool's link so you can reopen it anytime without re-pasting anything.</p>
-            <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pexelsKey2: pexelsKey2.trim(), pexelsKey3: pexelsKey3.trim(), pixabayKey: pixabayKey.trim(), pixabayKey2: pixabayKey2.trim(), pixabayKey3: pixabayKey3.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...mono, letterSpacing: "0.1em" }} className="w-full py-3.5 rounded-md text-[13px] font-semibold uppercase">Open my tool</button>
+            <div className="flex gap-2">
+              <button onClick={() => setStep(1)} style={{ border: `1px solid ${C.line}`, color: C.inkSoft, backgroundColor: C.card }} className="px-4 py-3.5 rounded-md text-sm">Back</button>
+              <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pexelsKey2: pexelsKey2.trim(), pexelsKey3: pexelsKey3.trim(), pixabayKey: pixabayKey.trim(), pixabayKey2: pixabayKey2.trim(), pixabayKey3: pixabayKey3.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...mono, letterSpacing: "0.1em" }} className="flex-1 py-3.5 rounded-md text-[13px] font-semibold uppercase">Open my tool</button>
+            </div>
           </div>
         )}
       </div>
