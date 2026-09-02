@@ -1096,12 +1096,30 @@ function FootageFinder() {
       const flushTimer = setInterval(flush, 400);
       try {
         let cursor = 0;
+        // Every clip already handed to an earlier scene in this run. See the
+        // note in the worker below for why this exists.
+        const usedIds = new Set();
         const worker = async () => {
           for (;;) {
             const i = cursor++;
             if (i >= acc.length) return;
             try {
-              acc[i].results = await searchScene(keywords[i], { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation, perPage: perScene, page: 1 });
+              const found = await searchScene(keywords[i], { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation, perPage: perScene, page: 1 });
+              // Never hand the SAME clip to two different scenes.
+              //
+              // When a rich search finds nothing, searchScene falls back to a
+              // much broader one — "child holding smartphone glowing screen
+              // dark room" becomes just "child holding". Measured on a real
+              // 38-scene script: 8 of the 38 scenes fell back onto a search
+              // another scene was also using. Same search, same top result, so
+              // one unrelated clip kept reappearing across the video.
+              //
+              // Prefer clips no earlier scene took. If that would leave this
+              // scene with nothing at all, keep what it found — a slightly
+              // repeated clip beats an empty card.
+              const fresh = found.filter((r) => !usedIds.has(r.id));
+              acc[i].results = fresh.length ? fresh : found;
+              acc[i].results.forEach((r) => usedIds.add(r.id));
             } catch (err) {
               if (err.message === "PEXELS_RATE") rateHit = true; // keep going, just no results for this scene
               else throw err; // real errors (auth, Claude) still abort
