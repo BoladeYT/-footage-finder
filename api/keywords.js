@@ -17,6 +17,12 @@
 // specific version (which is exactly what breaks a pinned name over time).
 const MODEL = "gemini-flash-latest";
 
+// Vercel cuts a serverless function off after ~10s by default. A "thinking"
+// Gemini model reading the whole script can take 15-30s to answer, so without
+// this it gets killed mid-response and the tool has to retry, making long
+// scripts crawl. 60s is the max the Hobby (free) plan allows — plenty of room.
+export const maxDuration = 60;
+
 // The relay can hold up to 3 Gemini keys: GEMINI_KEY (main) plus optional
 // GEMINI_KEY2 / GEMINI_KEY3 from SEPARATE free Google accounts. Set them in the
 // Vercel dashboard (Settings → Environment Variables). We rotate to the next key
@@ -94,7 +100,9 @@ export default async function handler(req, res) {
     }
 
     // Repackage into the Anthropic shape the browser already understands.
-    res.status(200).json({ content: [{ type: "text", text }] });
+    // keyCount tells the browser HOW MANY keys we hold (never the keys) so it can
+    // pace its calls: 3 keys means it can go faster, 1 key means it must go gentler.
+    res.status(200).json({ content: [{ type: "text", text }], keyCount: keys.length });
   } catch (err) {
     res.status(502).json({ error: "Relay failed", detail: String(err).slice(0, 300) });
   }
