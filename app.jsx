@@ -229,6 +229,55 @@ async function callClaude(prompt) {
   }
 }
 
+// Turn a failed AI call into a sentence that names the real problem and the real
+// fix. The old version said "being rate-limited by Google" for every possible
+// fault, which sent people off to wait a minute even when waiting could not
+// possibly help: a withdrawn model stays withdrawn, and a missing key stays
+// missing. The number comes from callClaude's message just above.
+function aiFailMessage(msg) {
+  const m = /\((\d{3})\)/.exec(msg || "");
+  switch (m ? Number(m[1]) : 0) {
+    case 410:
+      // The relay walked its whole list of model names and Google no longer
+      // recognises any of them. Nothing here can fix that.
+      return "Google has withdrawn the AI model this tool uses, so nothing will work until the tool itself is updated. Ask whoever you got it from for the newest version.";
+    case 404:
+      // Vercel's own "no such page" — the relay file was never uploaded.
+      return "The AI part of this tool is missing. The api folder needs to be on GitHub alongside index.html, then redeploy.";
+    case 400:
+    case 401:
+    case 403:
+      return "Google rejected the AI key for this tool. In Vercel, open Settings → Environment Variables, check GEMINI_KEY, then Redeploy.";
+    case 429:
+      return "Google is limiting how fast this tool can ask for keywords. Wait a minute and try again — adding a second Gemini key in Vercel gets rid of this for good.";
+    default:
+      // Includes "(timeout)", which carries no number at all: Google was asked
+      // and simply never answered.
+      return "Google's AI is busy or slow right now, so the keyword step could not finish. Wait a minute and try again.";
+  }
+}
+
+// A run never stops when the AI fails — it quietly carries on with your own
+// sentences as the search words. That is the right behaviour (some clips beat no
+// clips), but on its own it is a lie: the tool said "Done" while the AI was
+// dead, and the honest message above never got a chance to appear. So each
+// fallback writes a note here, and the end of the run reads the notes.
+//
+//   reason   — the FIRST failure's message. Later ones are the same fault
+//              repeating, and the first arrived before retries muddied it.
+//   fellBack — scenes searched with your own words instead of AI keywords.
+//   wrote    — scenes the AI did write. If this is 0 and fellBack is not, the
+//              AI never worked at all, which is worth saying out loud.
+const aiTrouble = { reason: "", fellBack: 0, wrote: 0 };
+function resetAITrouble() {
+  aiTrouble.reason = "";
+  aiTrouble.fellBack = 0;
+  aiTrouble.wrote = 0;
+}
+function noteAITrouble(e) {
+  if (!aiTrouble.reason) aiTrouble.reason = (e && e.message) || String(e || "");
+}
+
 // Fallback splitter (used only if the AI segmentation step fails): splits on
 // sentence-ending punctuation. Safe but coarse — a sentence with several actions
 // stays as one scene. segmentScript() below is the primary path.
@@ -318,7 +367,10 @@ async function generateKeywords(fullScript, batch) {
   let arr = [];
   try {
     arr = parseJSONArray(await callClaude(prompt));
-  } catch {
+  } catch (e) {
+    // Keep going with an empty batch (each line gets its own retry below), but
+    // leave a note so the end of the run can admit the AI is in trouble.
+    noteAITrouble(e);
     arr = [];
   }
   // First pass from the batch response.
@@ -326,15 +378,24 @@ async function generateKeywords(fullScript, batch) {
   // Any line Claude skipped or returned blank gets its OWN focused retry,
   // so we never fall back to a chopped-off sentence like "Everything far away starts".
   for (let i = 0; i < out.length; i++) {
-    if (out[i]) continue;
+    if (out[i]) {
+      aiTrouble.wrote++;
+      continue;
+    }
     try {
       out[i] = await oneKeyword(fullScript, batch[i]);
-    } catch {
+    } catch (e) {
+      noteAITrouble(e);
       out[i] = "";
+    }
+    if (out[i]) {
+      aiTrouble.wrote++;
+      continue;
     }
     // Last resort only if the retry also failed: use the FULL line (cleaned),
     // never a truncated slice — a whole sentence still searches sensibly.
-    if (!out[i]) out[i] = batch[i].replace(/[".]+$/g, "").trim();
+    out[i] = batch[i].replace(/[".]+$/g, "").trim();
+    aiTrouble.fellBack++;
   }
   return out;
 }
@@ -730,13 +791,29 @@ async function persist(s) {
 }
 
 // The workspace — the script and the scenes it produced — lives under its own key
-// so a refresh, a closed tab or a crash never costs you a run. Deliberately kept
-// apart from the settings above: settings are tiny and always fit, a workspace can
-// be a few hundred KB, so a storage failure on one must not take the other down.
+// so an accidental refresh, or a crash mid-run, never costs you a finished run.
+//
+// sessionStorage, NOT localStorage, and that distinction IS the feature. A refresh
+// keeps your work; closing the tab throws it away. The first version used
+// localStorage and kept everything forever, which the user hit in real use:
+// opening the tool the next day to start a NEW video meant the old script and all
+// its footage were still sitting there, so the first thing you had to do was
+// select the whole box and delete it. Surviving a refresh is protection.
+// Remembering last week's video is just something in the way.
+// Bonus: sessionStorage is per-tab, so two tabs can hold two different videos.
+//
+// Deliberately kept apart from the settings above. Settings are tiny and SHOULD be
+// permanent, so they stay in localStorage — nobody wants to re-enter their keys.
+// A workspace can be a few hundred KB, so a storage failure on one must not take
+// the other down either.
 const WORK_KEY = "ff_work_v1";
 function loadWork() {
+  // Versions before this one saved the workspace in localStorage, where it
+  // outlived the tab. Clear any leftover copy once, or an old script would sit
+  // there unread forever, still using up its share of the quota.
+  try { localStorage.removeItem(WORK_KEY); } catch {}
   try {
-    const raw = localStorage.getItem(WORK_KEY);
+    const raw = sessionStorage.getItem(WORK_KEY);
     if (!raw) return null;
     const w = JSON.parse(raw);
     if (!w || !Array.isArray(w.scenes)) return null;
@@ -752,20 +829,20 @@ function loadWork() {
 }
 function persistWork(w) {
   try {
-    localStorage.setItem(WORK_KEY, JSON.stringify(w));
+    sessionStorage.setItem(WORK_KEY, JSON.stringify(w));
   } catch {
     // Almost always the ~5 MB browser quota on a very long run. Drop the previous
     // copy to free its space and try once more; if it still won't fit, carry on
     // without saving rather than breaking the run in progress.
     try {
-      localStorage.removeItem(WORK_KEY);
-      localStorage.setItem(WORK_KEY, JSON.stringify(w));
+      sessionStorage.removeItem(WORK_KEY);
+      sessionStorage.setItem(WORK_KEY, JSON.stringify(w));
     } catch {}
   }
 }
 function clearWork() {
   try {
-    localStorage.removeItem(WORK_KEY);
+    sessionStorage.removeItem(WORK_KEY);
   } catch {}
 }
 
@@ -911,6 +988,8 @@ function FootageFinder() {
         // Bring the last workspace back. This is what makes a refresh survivable:
         // the script, the scenes and which clips were ticked all return exactly as
         // they were, so you never re-paste and re-run just because a tab reloaded.
+        // Only a refresh, though — see the note on WORK_KEY. Close the tab and you
+        // come back to an empty box, ready for the next video.
         const w = loadWork();
         const n = w ? w.scenes.length : 0;
         if (w && (w.script || n)) {
@@ -918,12 +997,14 @@ function FootageFinder() {
           setScenes(w.scenes);
           setSelected(w.selected || {});
         }
+        // Worded for what actually just happened: a reload, not a return after
+        // days away. "Welcome back" read as odd when it appeared right after F5.
         setStatus(
           n
-            ? `Welcome back — your last run is still here (${n} scene${n === 1 ? "" : "s"}). Analyse again to start over.`
+            ? `Your last run is still here — ${n} scene${n === 1 ? "" : "s"}. Analyse again to start over.`
             : w && w.script
-            ? "Welcome back — your script is still here. Hit Analyse when you're ready."
-            : "Welcome back. Paste a new script and hit Analyse."
+            ? "Your script is still here. Hit Analyse when you're ready."
+            : "Paste a script and hit Analyse."
         );
       }
       setBooted(true);
@@ -1002,6 +1083,31 @@ function FootageFinder() {
     return `About ${fmtDuration(left)} left · ${fmtDuration(elapsedSec)} elapsed`;
   })();
 
+  /* start over */
+  // Closing the tab already clears everything (see WORK_KEY). This is the same
+  // fresh start WITHOUT closing the tab — the user's real complaint was having to
+  // select a whole script by hand before pasting the next one.
+  //
+  // Confirm first, because it throws away finished work: a run costs minutes and
+  // some of the picked clips may not be downloaded yet. Only asks when there is
+  // actually something to lose.
+  function startNew() {
+    if ((script.trim() || scenes.length) && !confirm("Clear this script and its footage, and start a new video?")) return;
+    setScript("");
+    setScenes([]);
+    setSelected({});
+    setPlaying(null);
+    // Reset the run-status trimmings too, or a stale "About 2m left" or an old
+    // long-script warning would sit over a page that is now empty.
+    setProgress(null);
+    setStatusErr(false);
+    setDismissWarn(false);
+    setEtaSec(null);
+    setStartedAt(0);
+    clearWork();
+    setStatus("Cleared. Paste your next script.");
+  }
+
   /* analysis */
   async function runAnalysis() {
     if (!script.trim()) {
@@ -1025,6 +1131,8 @@ function FootageFinder() {
     setNow(Date.now());
     setFactIdx(0);
     setEtaSec(estimateSeconds({ sceneCount: Math.max(1, (splitIntoScenes(script) || []).length) }));
+    // Fresh notepad for AI trouble — this run's problems only, not last run's.
+    resetAITrouble();
     try {
       // Break the script into filmable beats via the AI (one action per scene).
       // Fall back to the coarse sentence splitter if that step fails for any reason.
@@ -1033,7 +1141,8 @@ function FootageFinder() {
       try {
         lines = await segmentScript(script);
         if (!lines || lines.length === 0) lines = splitIntoScenes(script);
-      } catch {
+      } catch (e) {
+        noteAITrouble(e);
         lines = splitIntoScenes(script);
       }
       // Now we know the real scene count, so re-estimate against it.
@@ -1107,16 +1216,20 @@ function FootageFinder() {
               const found = await searchScene(keywords[i], { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation, perPage: perScene, page: 1 });
               // Never hand the SAME clip to two different scenes.
               //
-              // When a rich search finds nothing, searchScene falls back to a
-              // much broader one — "child holding smartphone glowing screen
-              // dark room" becomes just "child holding". Measured on a real
-              // 38-scene script: 8 of the 38 scenes fell back onto a search
-              // another scene was also using. Same search, same top result, so
-              // one unrelated clip kept reappearing across the video.
+              // The cause is the stock library, not this code. Measured against
+              // real Pexels on 2026-09-02, on a 33-scene script: the full rich
+              // query found clips 33 times out of 33, so the broadening
+              // fallback in searchScene never even fired. The repeats come from
+              // DIFFERENT rich queries landing on the SAME clip, because the
+              // free libraries are small — "eye close-up macro" and "child
+              // looking at screen" both returned pexels' eye-close-up video.
+              // 5 clips turned up in more than one scene that way, which is why
+              // one stray clip seemed to follow the viewer through the video.
               //
               // Prefer clips no earlier scene took. If that would leave this
               // scene with nothing at all, keep what it found — a slightly
-              // repeated clip beats an empty card.
+              // repeated clip beats an empty card. Measured after this fix on a
+              // 21-scene run: 156 clips, 156 different clips, 12 trimmed here.
               const fresh = found.filter((r) => !usedIds.has(r.id));
               acc[i].results = fresh.length ? fresh : found;
               acc[i].results.forEach((r) => usedIds.add(r.id));
@@ -1149,8 +1262,22 @@ function FootageFinder() {
         flush();
       }
       const total = acc.reduce((n, s) => n + s.results.length, 0);
-      if (rateHit) {
+      // Order matters. A dead AI is the root cause and the only thing here the
+      // user can actually act on, so it speaks first. We only speak up when the
+      // OUTPUT suffered: if the AI wrote every keyword, a hiccup in the scene
+      // split earlier is not worth a warning.
+      if (aiTrouble.wrote === 0 && aiTrouble.fellBack > 0) {
+        // Nothing came back from the AI all run. The clips on screen were found
+        // using the script's own sentences, which is a much rougher search.
+        setStatus(aiFailMessage(aiTrouble.reason) + ` Meanwhile the tool searched using your own sentences, so these ${total} clips are a rough guess.`);
+        setStatusErr(true);
+      } else if (rateHit) {
         setStatus(`Done, but Pexels hit its free hourly request limit partway through, so some scenes have few or no results. Wait a few minutes, then use each scene's Shuffle to fill them in. (${total} results across ${acc.length} scenes.)`);
+        setStatusErr(true);
+      } else if (aiTrouble.fellBack > 0) {
+        // The AI worked for most scenes but skipped some. Name how many, and
+        // point at the button that fixes them one at a time.
+        setStatus(`Done — ${total} results across ${acc.length} scenes. The AI skipped ${aiTrouble.fellBack} scene${aiTrouble.fellBack === 1 ? "" : "s"}, which searched using your own words instead — press Regenerate on any card that looks wrong.`);
         setStatusErr(true);
       } else {
         setStatus(`Done — ${total} results across ${acc.length} scenes.`);
@@ -1158,7 +1285,7 @@ function FootageFinder() {
       }
     } catch (e) {
       if (e.message === "PEXELS_AUTH") setStatus("Your Pexels API key was rejected. Open Settings and check it.");
-      else if (e.message?.includes("Claude")) setStatus("The AI keyword step is being rate-limited by Google. Wait a minute and try again.");
+      else if (e.message?.includes("Claude")) setStatus(aiFailMessage(e.message));
       else setStatus("Something went wrong while analysing. Try again.");
       setStatusErr(true);
     } finally {
@@ -1514,11 +1641,26 @@ function FootageFinder() {
           <div className="flex items-center gap-3 mb-2">
             <Label>Your Script</Label>
             <div style={{ borderTop: `1px solid ${C.line}` }} className="flex-1 -mt-2" />
+            {/* Only shows up when there is something to clear, so an empty page stays
+                clean. Sits at the end of the row, away from Analyse — this throws work
+                away and should not be next to the button you press every run. */}
+            {(script.trim() || scenes.length > 0) && (
+              <button
+                onClick={startNew}
+                disabled={analyzing}
+                title="Clear this script and its footage"
+                style={{ color: C.inkSoft, border: `1px solid ${C.line}`, backgroundColor: C.card, ...sans }}
+                className="-mt-2 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px] hover:opacity-80 disabled:opacity-40"
+              >
+                <Trash2 size={13} />
+                Start new video
+              </button>
+            )}
           </div>
           <textarea
             value={script}
             onChange={(e) => { setScript(e.target.value); if (!e.target.value.trim()) setDismissWarn(false); }}
-            placeholder="Paste your YouTube script here. Each sentence is read in context — the AI sees the line before and after to find footage that fits the exact moment, not just the words..."
+            placeholder="Paste your script here. Each sentence is read in context — the AI sees the line before and after to find footage that fits the exact moment, not just the words..."
             style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, color: C.ink, ...sans }}
             className="w-full h-44 rounded-lg p-4 text-[14px] leading-relaxed resize-y outline-none focus:border-amber-700"
           />
