@@ -29,7 +29,23 @@
 // answering, which is wasted effort for writing a six-word search phrase.
 // It also never truncated: the longest script above produced 261 scenes using
 // 3,531 of the 8,192 output tokens, and gave the identical answer every time.
-const MODEL = "gemini-flash-lite-latest";
+//
+// SPARE NAMES. Even an alias can be withdrawn one day, and when it is, Google
+// answers 404 and every single call fails — the tool is dead until this file is
+// edited by hand. So we keep spares and move down the list on a 404. Order is
+// deliberate: the best one first, then the only two others measured above that
+// actually ANSWERED. A 404 comes back instantly, so walking the whole list costs
+// about a second and can never push us past Vercel's time limit.
+//
+// Be clear about what this does NOT rescue: a model that still exists but stops
+// answering (what gemini-flash-latest did). Waiting on one of those already eats
+// 45 of our 60 seconds, so there is no room to try a second name in the same
+// request. That case still needs a new version of this file.
+const MODELS = [
+  "gemini-flash-lite-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+];
 
 // If Google has not answered in this long, stop waiting, return 503, and let the
 // browser retry. Without this a model that hangs forever holds the whole run
@@ -49,6 +65,12 @@ const UPSTREAM_TIMEOUT_MS = 45000;
 // function being killed mid-flight. 60s is the max the Hobby (free) plan allows.
 export const maxDuration = 60;
 
+// Hard stop for the whole request, kept a safe margin under maxDuration. At 60s
+// Vercel kills the function WITHOUT letting it reply, so the browser would get
+// nothing readable at all — worse than an error it can act on. Every attempt
+// checks this clock first and shortens its own wait to fit what is left.
+const BUDGET_MS = 50000;
+
 // The relay can hold up to 3 Gemini keys: GEMINI_KEY (main) plus optional
 // GEMINI_KEY2 / GEMINI_KEY3 from SEPARATE free Google accounts. Set them in the
 // Vercel dashboard (Settings → Environment Variables). We rotate to the next key
@@ -59,6 +81,45 @@ function geminiKeys() {
     .filter(Boolean);
 }
 
+// One model name, tried against each key in turn. Returns the moment it has an
+// answer worth reporting. Kept as its own function so "give up on this name and
+// try the next one" is a plain return instead of a jump out of two nested loops.
+async function askGemini(model, keys, body, deadline) {
+  let last = { status: 503, raw: "Gemini was not asked" };
+  for (let i = 0; i < keys.length; i++) {
+    // Only start an attempt if there is enough time left for it to mean anything.
+    const left = deadline - Date.now();
+    if (left < 4000) return last;
+    let upstream;
+    try {
+      upstream = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": keys[i] },
+          body,
+          signal: AbortSignal.timeout(Math.min(UPSTREAM_TIMEOUT_MS, left)),
+        }
+      );
+    } catch (e) {
+      // Timed out or the connection failed. Report it as 503 so the browser
+      // treats it as temporary and retries, rather than killing the scene.
+      last = { status: 503, raw: "Gemini did not answer in time" };
+      continue; // try the next key, if there is one
+    }
+    const raw = await upstream.text();
+    if (upstream.ok) return { status: 200, raw, model };
+    last = { status: upstream.status, raw };
+    // 404 means this NAME is wrong or withdrawn. Every key would be told the same
+    // thing, so stop spending them and let the caller try the next name.
+    if (upstream.status === 404) return { ...last, modelGone: true };
+    // 429 and 503 mean busy — another key may still have room. Anything else is
+    // a real fault and is worth reporting straight away.
+    if (upstream.status !== 429 && upstream.status !== 503) return last;
+  }
+  return last;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Use POST" });
@@ -67,7 +128,10 @@ export default async function handler(req, res) {
 
   const keys = geminiKeys();
   if (!keys.length) {
-    res.status(500).json({ error: "Server missing GEMINI_KEY. Set it in Vercel settings." });
+    // 403, not 500. The browser retries a 500 five times over half a minute
+    // before showing anything, and no amount of retrying conjures up a key. 403
+    // fails straight away with a message that names the actual fix.
+    res.status(403).json({ error: "Server missing GEMINI_KEY. Set it in Vercel settings." });
     return;
   }
 
@@ -91,35 +155,26 @@ export default async function handler(req, res) {
   });
 
   try {
-    // Try each key in order; rotate to the next ONLY on a rate-limit/overload
-    // (429/503) or a timeout. Any other status is a real error, so stop and report it.
-    let last = { status: 500, raw: "No Gemini keys configured" };
-    for (let i = 0; i < keys.length; i++) {
-      let upstream;
-      try {
-        upstream = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-goog-api-key": keys[i] },
-            body,
-            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-          }
-        );
-      } catch (e) {
-        // Timed out or the connection failed. Report it as 503 so the browser
-        // treats it as temporary and retries, rather than killing the scene.
-        last = { status: 503, raw: "Gemini did not answer within " + UPSTREAM_TIMEOUT_MS + "ms" };
-        continue; // try the next key, if there is one
-      }
-      const raw = await upstream.text();
-      if (upstream.ok) { last = { status: 200, raw }; break; }
-      last = { status: upstream.status, raw };
-      if (upstream.status !== 429 && upstream.status !== 503) break;
+    // Walk the spare names. In the normal case this loop runs exactly once.
+    const deadline = Date.now() + BUDGET_MS;
+    let last = { status: 502, raw: "No attempt was made" };
+    for (const model of MODELS) {
+      last = await askGemini(model, keys, body, deadline);
+      if (last.status === 200) break;
+      // A withdrawn name is the ONLY reason to try a different one. Busy, slow or
+      // broken would go the same way further down the list, and we have no time
+      // to spare proving it.
+      if (!last.modelGone) break;
     }
 
     if (last.status !== 200) {
-      res.status(last.status).json({ error: "Upstream error", detail: last.raw.slice(0, 500) });
+      // 404 from Gemini means the model name is gone. Report that as 410 ("gone")
+      // instead, so the browser can tell it apart from the OTHER thing that
+      // answers 404 here — this file not being uploaded at all. One needs a new
+      // version of the tool; the other needs the api folder put on GitHub. Very
+      // different fixes, so they must not share a status code.
+      const status = last.modelGone ? 410 : last.status;
+      res.status(status).json({ error: "Upstream error", detail: String(last.raw).slice(0, 500) });
       return;
     }
 
@@ -137,7 +192,9 @@ export default async function handler(req, res) {
     // Repackage into the Anthropic shape the browser already understands.
     // keyCount tells the browser HOW MANY keys we hold (never the keys) so it can
     // pace its calls: 3 keys means it can go faster, 1 key means it must go gentler.
-    res.status(200).json({ content: [{ type: "text", text }], keyCount: keys.length });
+    // model is only there so you can see which name actually answered, in case the
+    // tool has quietly fallen back to a spare.
+    res.status(200).json({ content: [{ type: "text", text }], keyCount: keys.length, model: last.model });
   } catch (err) {
     res.status(502).json({ error: "Relay failed", detail: String(err).slice(0, 300) });
   }
