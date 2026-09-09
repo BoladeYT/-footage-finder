@@ -415,21 +415,56 @@ async function oneKeyword(fullScript, line) {
   return t;
 }
 
-async function regenKeyword(fullScript, line, prev) {
+async function regenKeyword(fullScript, line, prev, before, after) {
+  const around =
+    (before ? `The line right BEFORE it: "${before}".\n` : "") +
+    (after ? `The line right AFTER it: "${after}".\n` : "");
   const prompt =
     `You are a senior YouTube video editor sourcing B-roll on Pexels/Pixabay.\n` +
     `Full script for context only:\n"""${fullScript}"""\n\n` +
-    `One line from that script is: "${line}". ` +
-    `The previous stock-footage search was "${prev}". ` +
-    `Suggest ONE DIFFERENT, fresh Pexels/Pixabay search query that captures a different visual ` +
-    `angle on the same moment. Use the surrounding script context to keep the subject and mood right. ` +
-    `Match this style: SUBJECT + visible action/expression + setting, ` +
+    `Focus on THIS line: "${line}".\n` + around +
+    `The previous search "${prev}" didn't fit. Write ONE fresh search for the SAME moment: ` +
+    `same subject, same place, same mood as this line, just a DIFFERENT shot of it ` +
+    `(new framing or action). Do NOT switch to a different topic.\n` +
+    `Format: SUBJECT + visible action/expression + setting, ` +
     `plus a framing word when it fits (close-up, macro, wide, aerial, silhouette, timelapse). ` +
     `Usually 4 to 6 words, cinematic but always a real filmable shot (e.g. ` +
     `"child eye roll reluctant expression close-up"). No abstract phrases. ` +
     `Return ONLY the query text, nothing else.`;
   const t = (await callClaude(prompt)).trim().replace(/^["']|["']$/g, "");
   return t || prev;
+}
+
+/* ---- shared: choose a ~1080p source instead of the biggest available ---- */
+// Both providers offer several sizes of the SAME clip. Instead of grabbing the
+// largest (often 2K/4K), pick the lightest file that still fills a 1080p timeline:
+// long edge <= 1920 AND short edge <= 1080 (works for landscape, portrait, square).
+// Prefer an exact 1920x1080 / 1080x1920, else the biggest that still fits. If EVERY
+// option is bigger than 1080p, take the smallest of those (closest to target, never
+// a needless 4K). No re-encoding — it just points at the right file the API returns.
+function pickVideoFile(files) {
+  const valid = (files || []).filter((f) => f && f.link && f.width > 0 && f.height > 0);
+  if (!valid.length) return (files || []).find((f) => f && f.link) || null;
+  const long = (f) => Math.max(f.width, f.height);
+  const short = (f) => Math.min(f.width, f.height);
+  const area = (f) => f.width * f.height;
+  const fits = valid.filter((f) => long(f) <= 1920 && short(f) <= 1080);
+  if (fits.length) {
+    const exact = fits.find(
+      (f) => (f.width === 1920 && f.height === 1080) || (f.width === 1080 && f.height === 1920)
+    );
+    return exact || fits.slice().sort((a, b) => area(b) - area(a))[0];
+  }
+  return valid.slice().sort((a, b) => area(a) - area(b))[0];
+}
+
+// Cap a Pexels PHOTO at ~1920 on the long edge. Pexels images are Imgix-backed, so
+// adding fit=max&w=1920&h=1920 to the original URL serves a smaller render of the
+// SAME photo: aspect kept, downscale-only (never upscales), no crop.
+function pexelsPhotoCap(src) {
+  const orig = src && src.original;
+  if (!orig) return (src && (src.large2x || src.large)) || "";
+  return orig + (orig.includes("?") ? "&" : "?") + "auto=compress&cs=tinysrgb&fit=max&w=1920&h=1920";
 }
 
 /* ---- Pexels ---- */
@@ -447,7 +482,7 @@ async function pexelsPhotos(q, key, page = 1, orientation = "landscape", perPage
     type: "photo",
     source: "Pexels",
     thumb: p.src.large,
-    download: p.src.original,
+    download: pexelsPhotoCap(p.src),
     url: p.url,
     label: `Pexels Photo #${p.id}`,
   }));
@@ -463,15 +498,16 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage
   const d = await r.json();
   return (d.videos || []).map((v) => {
     const files = (v.video_files || []).filter((f) => f.file_type === "video/mp4");
+    // Preview stays light (smallest usable file); download aims at ~1080p, not 4K.
     const sd = files.find((f) => f.quality === "sd") || files[0];
-    const hd = files.find((f) => f.quality === "hd") || sd;
+    const pick = pickVideoFile(files) || sd;
     return {
       id: "px-v-" + v.id,
       type: "video",
       source: "Pexels",
       thumb: v.image,
       preview: (sd && sd.link) || "",
-      download: (hd && hd.link) || (sd && sd.link) || "",
+      download: (pick && pick.link) || (sd && sd.link) || "",
       url: v.url,
       label: `Pexels Video #${v.id}`,
     };
@@ -526,7 +562,7 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPag
     type: "photo",
     source: "Pixabay",
     thumb: h.webformatURL,
-    download: h.largeImageURL,
+    download: h.fullHDURL || h.largeImageURL,
     url: h.pageURL,
     label: `Pixabay Photo #${h.id}`,
   }));
@@ -548,6 +584,11 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
       const vids = h.videos || {};
       const dim = vids.large || vids.medium || vids.small || vids.tiny || {};
       const portrait = (dim.height || 0) > (dim.width || 0);
+      // Aim download at ~1080p by real dimensions (large is often 4K now).
+      const files = [vids.large, vids.medium, vids.small, vids.tiny]
+        .filter(Boolean)
+        .map((f) => ({ link: f.url, width: f.width || 0, height: f.height || 0 }));
+      const pick = pickVideoFile(files);
       const thumb =
         vids.large?.thumbnail ||
         vids.medium?.thumbnail ||
@@ -558,7 +599,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
         source: "Pixabay",
         thumb,
         preview: vids.small?.url || vids.tiny?.url || vids.medium?.url || "",
-        download: vids.large?.url || vids.medium?.url || vids.small?.url || "",
+        download: (pick && pick.link) || vids.medium?.url || vids.small?.url || vids.large?.url || "",
         url: h.pageURL,
         label: `Pixabay Video #${h.id}`,
         _portrait: portrait,
@@ -674,7 +715,11 @@ function clipFetchURL(url) {
   return clipNeedsProxy(url) ? `/api/proxy?url=${encodeURIComponent(url)}` : url;
 }
 async function fetchClipBlob(item) {
-  const res = await fetch(clipFetchURL(item.download));
+  const url = (item && item.download ? item.download : "").trim();
+  if (!url) throw new Error("no download url"); // count as a skip, not a silent hang
+  // Never wait forever on one clip. A stalled clip used to leave the whole ZIP
+  // spinning with nothing to catch; a timeout throws, so the loop skips it and moves on.
+  const res = await fetch(clipFetchURL(url), { signal: AbortSignal.timeout(25000) });
   if (!res.ok) throw new Error("HTTP " + res.status);
   return res.blob();
 }
@@ -738,8 +783,12 @@ async function downloadMedia(item, seq, total, keyword) {
 // ZIP with no scene number on them. So instead of dropping picks, we carry them
 // over: your ticked clips stay at the front of the new set, still ticked, still
 // visible. Nothing is lost by looking around.
-function mergeKeepingPicks(prevResults, nextResults, selected) {
-  const kept = (prevResults || []).filter((r) => selected[r.id]);
+// A pick is remembered per SCENE, not just per clip. The same stock clip can be
+// returned in two different scenes; ticking it in one must not tick it in the other.
+// So the selection map is keyed by scene id + clip id together.
+const selKey = (sceneId, clipId) => sceneId + "|" + clipId;
+function mergeKeepingPicks(prevResults, nextResults, selected, sceneId) {
+  const kept = (prevResults || []).filter((r) => selected[selKey(sceneId, r.id)]);
   if (!kept.length) return nextResults;
   const keptIds = new Set(kept.map((r) => r.id));
   return [...kept, ...(nextResults || []).filter((r) => !keptIds.has(r.id))];
@@ -1312,16 +1361,19 @@ function FootageFinder() {
     try {
       const page = (s.page || 1) + 1;
       const results = await searchScene(s.keyword, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page });
-      updateScene(s.id, { results: results.length ? mergeKeepingPicks(s.results, results, selected) : s.results, page });
+      updateScene(s.id, { results: results.length ? mergeKeepingPicks(s.results, results, selected, s.id) : s.results, page });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
   async function regenScene(s) {
     setBusy(s.id, true);
     try {
-      const kw = await regenKeyword(script, s.line, s.keyword);
+      const idx = scenes.findIndex((x) => x.id === s.id);
+      const before = idx > 0 ? scenes[idx - 1].line : "";
+      const after = idx >= 0 && idx < scenes.length - 1 ? scenes[idx + 1].line : "";
+      const kw = await regenKeyword(script, s.line, s.keyword, before, after);
       const results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page: 1 });
-      updateScene(s.id, { keyword: kw, results: mergeKeepingPicks(s.results, results, selected), page: 1 });
+      updateScene(s.id, { keyword: kw, results: mergeKeepingPicks(s.results, results, selected, s.id), page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
@@ -1337,7 +1389,7 @@ function FootageFinder() {
     setBusy(s.id, true);
     try {
       const results = await searchScene(kw, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: s.orientation || orientation, perPage: s.perScene || perScene, page: 1 });
-      updateScene(s.id, { keyword: kw, results: mergeKeepingPicks(s.results, results, selected), page: 1 });
+      updateScene(s.id, { keyword: kw, results: mergeKeepingPicks(s.results, results, selected, s.id), page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
@@ -1350,23 +1402,24 @@ function FootageFinder() {
     setBusy(s.id, true);
     try {
       const results = await searchScene(s.keyword, { pexelsKeys, pixabayKeys, sources, mediaTypes, orientation: next, perPage: s.perScene || perScene, page: 1 });
-      updateScene(s.id, { results: results.length ? mergeKeepingPicks(s.results, results, selected) : s.results, page: 1 });
+      updateScene(s.id, { results: results.length ? mergeKeepingPicks(s.results, results, selected, s.id) : s.results, page: 1 });
     } catch (e) { noteSceneError(e); }
     setBusy(s.id, false);
   }
 
-  const toggleSel = (item) =>
+  const toggleSel = (item, sceneId) =>
     setSelected((m) => {
       const n = { ...m };
-      if (n[item.id]) delete n[item.id];
-      else n[item.id] = item;
+      const k = selKey(sceneId, item.id);
+      if (n[k]) delete n[k];
+      else n[k] = item;
       return n;
     });
-  const selectAll = (s) => setSelected((m) => ({ ...m, ...Object.fromEntries(s.results.map((r) => [r.id, r])) }));
+  const selectAll = (s) => setSelected((m) => ({ ...m, ...Object.fromEntries(s.results.map((r) => [selKey(s.id, r.id), r])) }));
   const clearScene = (s) =>
     setSelected((m) => {
       const n = { ...m };
-      s.results.forEach((r) => delete n[r.id]);
+      s.results.forEach((r) => delete n[selKey(s.id, r.id)]);
       return n;
     });
 
@@ -1433,16 +1486,17 @@ function FootageFinder() {
     const seen = new Set();
     scenes.forEach((s, i) => {
       s.results.forEach((r) => {
-        if (selected[r.id] && !seen.has(r.id)) {
-          seen.add(r.id);
-          out.push({ item: selected[r.id], seq: i + 1, keyword: s.keyword });
+        const k = selKey(s.id, r.id);
+        if (selected[k] && !seen.has(k)) {
+          seen.add(k);
+          out.push({ item: selected[k], seq: i + 1, keyword: s.keyword });
         }
       });
     });
-    Object.values(selected).forEach((it) => {
-      if (!seen.has(it.id)) {
-        seen.add(it.id);
-        out.push({ item: it, seq: scenes.length + 1, keyword: "" });
+    Object.keys(selected).forEach((k) => {
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push({ item: selected[k], seq: scenes.length + 1, keyword: "" });
       }
     });
     return out;
@@ -1512,7 +1566,7 @@ function FootageFinder() {
   function exportShotList() {
     const rows = [`${toolName} — Shot List`, "=".repeat(44), ""];
     scenes.forEach((s, i) => {
-      const picks = s.results.filter((r) => selected[r.id]);
+      const picks = s.results.filter((r) => selected[selKey(s.id, r.id)]);
       if (!picks.length) return;
       rows.push(`Scene ${i + 1}: ${s.line}`);
       rows.push(`Search: ${s.keyword}`);
@@ -1827,7 +1881,7 @@ function FootageFinder() {
             return (
               <React.Fragment key={s.id}>
               {plusRow(i)}
-              <div style={{ backgroundColor: C.cardAlt, border: `1px solid ${C.line}` }} className="ff-scene rounded-lg overflow-hidden">
+              <div style={{ backgroundColor: C.cardAlt, border: `1px solid ${C.line}`, contentVisibility: "auto", containIntrinsicSize: "1px 640px" }} className="ff-scene rounded-lg overflow-hidden">
                 {/* scene head */}
                 <div className="px-4 pt-3.5 pb-3">
                   <div className="ff-head flex items-start gap-3">
@@ -1907,11 +1961,11 @@ function FootageFinder() {
                     // the same tidy 4-wide layout that "4 clips" uses.)
                     <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
                       {s.results.map((r) => {
-                        const sel = !!selected[r.id];
+                        const sel = !!selected[selKey(s.id, r.id)];
                         return (
                           <div
                             key={r.id}
-                            onClick={() => toggleSel(r)}
+                            onClick={() => toggleSel(r, s.id)}
                             title={sel ? "Picked. Click to un-pick it." : "Click the picture to pick this clip."}
                             onMouseEnter={(e) => {
                               const v = e.currentTarget.querySelector("video");
