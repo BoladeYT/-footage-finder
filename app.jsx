@@ -458,6 +458,16 @@ function pickVideoFile(files) {
   return valid.slice().sort((a, b) => area(a) - area(b))[0];
 }
 
+// The other half of the pair. Every result now carries TWO download links: the
+// 1080p pick above, and this one — the biggest file the API offers. The Settings
+// "Download quality" switch decides which is used at download time, so flipping it
+// never re-runs a search or spends an API request. Same clip either way.
+function pickMaxVideoFile(files) {
+  const valid = (files || []).filter((f) => f && f.link && f.width > 0 && f.height > 0);
+  if (!valid.length) return (files || []).find((f) => f && f.link) || null;
+  return valid.slice().sort((a, b) => b.width * b.height - a.width * a.height)[0];
+}
+
 // Cap a Pexels PHOTO at ~1920 on the long edge. Pexels images are Imgix-backed, so
 // adding fit=max&w=1920&h=1920 to the original URL serves a smaller render of the
 // SAME photo: aspect kept, downscale-only (never upscales), no crop.
@@ -483,6 +493,7 @@ async function pexelsPhotos(q, key, page = 1, orientation = "landscape", perPage
     source: "Pexels",
     thumb: p.src.large,
     download: pexelsPhotoCap(p.src),
+    downloadHi: (p.src && (p.src.original || p.src.large2x || p.src.large)) || "",
     url: p.url,
     label: `Pexels Photo #${p.id}`,
   }));
@@ -501,6 +512,7 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage
     // Preview stays light (smallest usable file); download aims at ~1080p, not 4K.
     const sd = files.find((f) => f.quality === "sd") || files[0];
     const pick = pickVideoFile(files) || sd;
+    const max = pickMaxVideoFile(files) || pick;
     return {
       id: "px-v-" + v.id,
       type: "video",
@@ -508,6 +520,7 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage
       thumb: v.image,
       preview: (sd && sd.link) || "",
       download: (pick && pick.link) || (sd && sd.link) || "",
+      downloadHi: (max && max.link) || (pick && pick.link) || "",
       url: v.url,
       label: `Pexels Video #${v.id}`,
     };
@@ -563,6 +576,9 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPag
     source: "Pixabay",
     thumb: h.webformatURL,
     download: h.fullHDURL || h.largeImageURL,
+    // imageURL is the untouched original (only served on keys with full access);
+    // largeImageURL is always there, so "Highest" is never an empty link.
+    downloadHi: h.imageURL || h.fullHDURL || h.largeImageURL,
     url: h.pageURL,
     label: `Pixabay Photo #${h.id}`,
   }));
@@ -589,6 +605,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
         .filter(Boolean)
         .map((f) => ({ link: f.url, width: f.width || 0, height: f.height || 0 }));
       const pick = pickVideoFile(files);
+      const max = pickMaxVideoFile(files);
       const thumb =
         vids.large?.thumbnail ||
         vids.medium?.thumbnail ||
@@ -600,6 +617,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
         thumb,
         preview: vids.small?.url || vids.tiny?.url || vids.medium?.url || "",
         download: (pick && pick.link) || vids.medium?.url || vids.small?.url || vids.large?.url || "",
+        downloadHi: (max && max.link) || vids.large?.url || (pick && pick.link) || "",
         url: h.pageURL,
         label: `Pixabay Video #${h.id}`,
         _portrait: portrait,
@@ -714,8 +732,15 @@ function clipNeedsProxy(url) {
 function clipFetchURL(url) {
   return clipNeedsProxy(url) ? `/api/proxy?url=${encodeURIComponent(url)}` : url;
 }
-async function fetchClipBlob(item) {
-  const url = (item && item.download ? item.download : "").trim();
+// Which of the two links a result carries do we actually fetch? "max" takes the
+// biggest file the site offers, anything else takes the ~1080p pick. Old saved
+// workspaces have no downloadHi, so it falls back rather than breaking.
+function mediaURL(item, quality) {
+  if (!item) return "";
+  return (quality === "max" ? item.downloadHi || item.download : item.download) || "";
+}
+async function fetchClipBlob(item, quality) {
+  const url = mediaURL(item, quality).trim();
   if (!url) throw new Error("no download url"); // count as a skip, not a silent hang
   // Never wait forever on one clip. A stalled clip used to leave the whole ZIP
   // spinning with nothing to catch; a timeout throws, so the loop skips it and moves on.
@@ -758,10 +783,10 @@ function clipFileName(item, seq, total, keyword) {
   return `${prefix}${words || "clip"}${num ? "_" + num : ""}.${item.type === "video" ? "mp4" : "jpg"}`;
 }
 
-async function downloadMedia(item, seq, total, keyword) {
+async function downloadMedia(item, seq, total, keyword, quality) {
   const name = clipFileName(item, seq, total, keyword);
   try {
-    const blob = await fetchClipBlob(item);
+    const blob = await fetchClipBlob(item, quality);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -772,7 +797,7 @@ async function downloadMedia(item, seq, total, keyword) {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   } catch {
     // Last resort — open the file in a new tab so the user can still save it by hand.
-    window.open(item.download, "_blank");
+    window.open(mediaURL(item, quality), "_blank");
   }
 }
 
@@ -968,6 +993,10 @@ function FootageFinder() {
   const [sources, setSources] = useState({ pexels: true, pixabay: false });
   const [orientation, setOrientation] = useState("landscape"); // landscape | portrait
   const [perScene, setPerScene] = useState(4); // clips fetched & shown per scene: 2 or 4
+  // Download quality: "1080" (default — lighter files that still fill a 1080p
+  // timeline) or "max" (whatever the site's biggest file is, often 4K). This only
+  // changes WHICH file of the same clip is saved; searches and results are identical.
+  const [quality, setQuality] = useState("1080");
 
   // theme (light | dark) — persisted separately so it applies before settings load
   const [theme, setTheme] = useState(() => {
@@ -995,6 +1024,26 @@ function FootageFinder() {
   const [sceneBusy, setSceneBusy] = useState({});
   const [editing, setEditing] = useState(null);
   const [playing, setPlaying] = useState(null);
+
+  // ── Floating notice ──────────────────────────────────────────────────────
+  // Short heads-ups about a setting you just changed. These used to sit under
+  // the Options row permanently: they pushed the layout down and kept talking
+  // long after you'd read them. Now one slides in the moment you flip a switch
+  // and fades out on its own after a few seconds.
+  // `id` bumps on every call so React remounts the card and the animation
+  // restarts even if the same message fires twice in a row.
+  const [toast, setToast] = useState(null); // { id, text } | null
+  const toastTimer = useRef(null);
+  function showToast(text) {
+    clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), text });
+    toastTimer.current = setTimeout(() => setToast(null), 6000); // matches the CSS
+  }
+  function hideToast() {
+    clearTimeout(toastTimer.current);
+    setToast(null);
+  }
+  useEffect(() => () => clearTimeout(toastTimer.current), []); // don't leave a timer running
 
   // Escape closes the full-screen player. Clicking the dark surround already
   // closed it, but Escape is what everyone's hands reach for first, and on a
@@ -1031,6 +1080,7 @@ function FootageFinder() {
         setSources(s.sources || { pexels: true, pixabay: false });
         setOrientation(s.orientation === "portrait" ? "portrait" : "landscape");
         setPerScene(s.perScene === 2 ? 2 : 4);
+        setQuality(s.quality === "max" ? "max" : "1080");
         setStage("app");
         setReturning(true);
 
@@ -1099,7 +1149,7 @@ function FootageFinder() {
   }, [analyzing]);
 
   const saveAll = (extra = {}) =>
-    persist({ toolName, creator, pexelsKey, pexelsKey2, pexelsKey3, pixabayKey, pixabayKey2, pixabayKey3, mediaTypes, sources, orientation, perScene, ...extra });
+    persist({ toolName, creator, pexelsKey, pexelsKey2, pexelsKey3, pixabayKey, pixabayKey2, pixabayKey3, mediaTypes, sources, orientation, perScene, quality, ...extra });
 
   // The key lists handed to searchScene: primary first, then any backups, empty
   // ones filtered out. withKeyRotation() falls to the next only on a rate limit,
@@ -1506,7 +1556,7 @@ function FootageFinder() {
     const picks = orderedPicks();
     const total = scenes.length;
     for (const p of picks) {
-      await downloadMedia(p.item, p.seq, total, p.keyword);
+      await downloadMedia(p.item, p.seq, total, p.keyword, quality);
       await new Promise((r) => setTimeout(r, 600));
     }
   }
@@ -1526,7 +1576,7 @@ function FootageFinder() {
       for (let i = 0; i < picks.length; i++) {
         const it = picks[i].item;
         try {
-          const blob = await fetchClipBlob(it);
+          const blob = await fetchClipBlob(it, quality);
           let name = clipFileName(it, picks[i].seq, scenes.length, picks[i].keyword);
           // Guard against two clips resolving to the same filename inside the zip.
           if (used[name]) name = name.replace(/(\.[a-z0-9]+)$/i, `_${i + 1}$1`);
@@ -1621,6 +1671,7 @@ function FootageFinder() {
             // you refreshed — invisible until a run came back twice the size.
             orientation,
             perScene,
+            quality,
           });
           setStage("app");
           setStatus("All set. Paste your script and hit Analyse.");
@@ -1637,11 +1688,72 @@ function FootageFinder() {
         .ff-scroll::-webkit-scrollbar{height:8px;width:8px}
         .ff-scroll::-webkit-scrollbar-thumb{background:${C.line};border-radius:8px}
 
+        /* The floating notice: rises in, sits still, then fades itself out.
+           It rises from below and sinks back down because the card lives at the
+           bottom of the screen. The 6s total matches the setTimeout in
+           showToast(), so the card is fully faded at the moment React unmounts
+           it. These rules need no theme colour and would normally live in
+           index.html — they're here so this whole feature ships as one file. */
+        @keyframes ffToastIn{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+        @keyframes ffToastOut{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(10px)}}
+        .ff-toast{animation:ffToastIn .3s cubic-bezier(.22,1,.36,1) both, ffToastOut .5s ease 5.5s both;}
+        @media (prefers-reduced-motion: reduce){
+          .ff-toast{animation:none;opacity:1;}
+        }
+
         /* Everything that doesn't need a theme colour — including every rule
            that makes the tool usable on a phone — lives in index.html's
            <style> instead, because this block is inside the main screen and
            so never reaches the first-run setup wizard. */
       `}</style>
+
+      {/* Floating notice. It sits at the bottom, not the top: measured at the top
+          it cleared the header but then covered the script box and the "Start new
+          video" button, and your own script is the one thing on this page you must
+          be able to read. Down here it lifts itself clear of the download bar when
+          that bar is showing. z-index sits above the page but below the full-screen
+          player, so a notice can never float over a playing clip. Soft-rounded card,
+          hairline border, tinted icon badge and a small uppercase eyebrow — borrowed
+          from the reference UI. */}
+      {toast && (
+        <div style={{ position: "fixed", bottom: selectedCount > 0 ? 78 : 22, left: 0, right: 0, zIndex: 35 }} className="flex justify-center px-4 pointer-events-none">
+          <div
+            key={toast.id}
+            className="ff-toast pointer-events-auto flex items-start gap-3 rounded-2xl pl-3.5 pr-3 py-3"
+            style={{
+              backgroundColor: C.card,
+              border: `1px solid ${C.line}`,
+              boxShadow: theme === "dark"
+                ? "0 18px 40px -12px rgba(0,0,0,0.65)"
+                : "0 18px 40px -14px rgba(58,42,26,0.28)",
+              maxWidth: 430,
+            }}
+          >
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+              style={{ backgroundColor: theme === "dark" ? "rgba(192,138,90,0.18)" : "rgba(122,77,43,0.10)" }}
+            >
+              <Info size={14} style={{ color: C.brown }} />
+            </div>
+            <div className="flex-1 pt-[1px]">
+              <div style={{ ...mono, color: C.muted, letterSpacing: "0.12em" }} className="text-[9px] uppercase">
+                Heads up
+              </div>
+              <div style={{ ...sans, color: C.inkSoft }} className="text-[12.5px] leading-[1.55] mt-1">
+                {toast.text}
+              </div>
+            </div>
+            <button
+              onClick={hideToast}
+              title="Close"
+              className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 hover:opacity-100 opacity-45 transition-opacity"
+              style={{ color: C.ink }}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-5xl mx-auto px-5 sm:px-8 pt-8 pb-32">
         {/* header */}
@@ -1752,26 +1864,28 @@ function FootageFinder() {
               <Label>Clips / scene</Label>
               <div className="flex gap-2">
                 <Toggle active={perScene === 2} onClick={() => { setPerScene(2); saveAll({ perScene: 2 }); }}>2</Toggle>
-                <Toggle active={perScene === 4} onClick={() => { setPerScene(4); saveAll({ perScene: 4 }); }}>4</Toggle>
+                <Toggle active={perScene === 4} onClick={() => {
+                  setPerScene(4); saveAll({ perScene: 4 });
+                  showToast("More clips to choose from. But scenes load slower and ZIP files get bigger. This does not use up your hourly limit.");
+                }}>4</Toggle>
+              </div>
+            </div>
+            <div>
+              <Label>Download quality</Label>
+              <div className="flex gap-2">
+                <Toggle active={quality === "1080"} onClick={() => { setQuality("1080"); saveAll({ quality: "1080" }); }}>1080p</Toggle>
+                <Toggle active={quality === "max"} onClick={() => {
+                  setQuality("max"); saveAll({ quality: "max" });
+                  showToast("Saves the biggest file each site has — often 4K, and up to 10× bigger. Slower downloads. Switch back to 1080p any time; it changes nothing about your search results.");
+                }}>Highest</Toggle>
               </div>
             </div>
           </div>
 
-          {/* Heads-up shown ONLY when "4" is picked. This replaced a line that
-              was always on screen and spelled out the real total ("8 clips per
-              scene as things stand — it's 2 of each kind from each site..."):
-              accurate, but the user had to read it twice, and it shouted at you
-              even when nothing was wrong. Back to the old behaviour — silence on
-              2, one short warning on 4 — in plain words. */}
-          {perScene === 4 && (
-            <div style={{ ...mono, color: C.muted }} className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed">
-              <Info size={12} className="mt-[1px] flex-shrink-0" />
-              <span>
-                More clips to choose from. But scenes load slower and ZIP files get bigger.
-                This does not use up your hourly limit.
-              </span>
-            </div>
-          )}
+          {/* The two heads-ups that used to live here — one for "Highest", one
+              for "4" — are now the floating notice at the bottom of the screen,
+              fired from the buttons above. Only the costly side of each switch
+              says anything; 1080p and 2 are the quiet defaults. */}
         </div>
 
         {/* Long-script heads-up: appears ONLY when the pasted script is big enough
@@ -2037,7 +2151,7 @@ function FootageFinder() {
                                       <Play size={9} /> <span className="ff-lbl">Expand</span>
                                     </button>
                                   )}
-                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length, s.keyword); }} title="Saves this clip to your computer now. To pick it instead, click the picture." style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length, s.keyword, quality); }} title="Saves this clip to your computer now. To pick it instead, click the picture." style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
                                     <Download size={9} /> <span className="ff-lbl">Download</span>
                                   </button>
                                   <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="View — open the original page in a new tab" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
@@ -2109,7 +2223,7 @@ function FootageFinder() {
             <div className="flex items-center justify-between mt-3">
               <span style={{ ...mono, color: "#f4ead7" }} className="text-[11px]">{playing.label}</span>
               <div className="flex gap-2">
-                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw)} title="Save this clip to your computer" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
+                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw, quality)} title="Save this clip to your computer" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
                 <button onClick={() => window.open(playing.url, "_blank")} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
                 <button onClick={() => setPlaying(null)} title="Close (or press Escape)" style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
               </div>
