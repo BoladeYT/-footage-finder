@@ -2,6 +2,10 @@
 
 Follow these steps once. Takes about 5 minutes. No coding.
 
+**Before you start, you'll need a free GitHub account** (it's what signs you in
+to set the tool up). If you don't have one, make it now at **github.com** — just
+an email and password, takes two minutes. Keep that tab open.
+
 ---
 
 ### Step 1 — Get your free Gemini key
@@ -18,8 +22,17 @@ Free, no card. Keep it copied — you'll paste it in Step 3.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FBoladeYT%2F-footage-finder&env=GEMINI_KEY&envDescription=Your%20free%20Google%20Gemini%20key%20(get%20one%20at%20the%20link)&envLink=https%3A%2F%2Faistudio.google.com%2Fapikey&project-name=footage-finder&repository-name=footage-finder)
 
-- Sign up for a **free Vercel account** (use "Continue with GitHub" or your email)
-- If it asks to connect GitHub, click **Authorize** — this just copies the tool to you
+1. A Vercel page opens and says **"Sign in to clone and deploy"** — this is
+   normal, it's just the free sign-up.
+2. Click **Continue with GitHub** and log in with your GitHub account.
+3. If it asks to **Authorize**, click it — that just lets it copy the tool to you.
+
+> **First time signing up?** After you create your account, Vercel might drop you
+> on an empty dashboard and look like nothing happened. Don't worry — just **click
+> the Deploy button above one more time.** Now that you're signed in, it goes
+> straight to the next step.
+
+(No card, ever. Vercel is free.)
 
 ---
 
@@ -118,6 +131,8 @@ Free, no credit card.
 4. Click the link **"uploading an existing file"**.
 5. Open your `footage-finder` folder. Drag these onto the page:
    - `index.html`
+   - `app.js`
+   - `styles.css`
    - `app.jsx`
    - `vercel.json`
    - `package.json`
@@ -168,7 +183,9 @@ upload but not needed.)
 | File | What it does |
 |------|--------------|
 | `index.html` | The page that loads in the browser. |
-| `app.jsx` | Your tool — the design you built. |
+| `app.js` | Your tool, ready to run. Made from `app.jsx` — don't edit it by hand. |
+| `styles.css` | The tool's look (colours, spacing, sizes). Also made automatically. |
+| `app.jsx` | The editable version of the tool. Kept for reference; the page runs `app.js`. |
 | `api/keywords.js` | Hidden relay that safely holds your Gemini key. |
 | `api/proxy.js` | Lets the "Download ZIP" button bundle Pixabay clips. |
 | `vercel.json` | A tiny settings file for the host. |

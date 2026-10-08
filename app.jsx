@@ -28,6 +28,10 @@ const LIGHT = {
   brownDark: "#39271a",
   green: "#3f6b47",
   greenSoft: "#4e7a4e",
+  // Status accents, the one place the meaning of each is written down:
+  // brown = active/primary, green = done/photo, red = error, amber = caution.
+  red: "#a14b3a",
+  amber: "#b8862b",
   veil: "rgba(245,239,228,0.6)",
   thumbBg: "#ddd4c2",
   field: "#fffdf8",
@@ -46,6 +50,9 @@ const DARK = {
   brownDark: "#7a4d2b",
   green: "#6a9b6f",
   greenSoft: "#7aa87a",
+  // Same semantic keys as LIGHT, lifted for legibility on the dark canvas.
+  red: "#d0765f",
+  amber: "#d7a24a",
   veil: "rgba(18,14,10,0.62)",
   thumbBg: "#2a2219",
   field: "#15100c",
@@ -53,9 +60,13 @@ const DARK = {
 let C = LIGHT;
 function applyTheme(mode) { C = mode === "dark" ? DARK : LIGHT; }
 try { if (localStorage.getItem("ff_theme") === "dark") applyTheme("dark"); } catch {}
-const serif = { fontFamily: 'Georgia, "Times New Roman", Times, serif' };
+const serif = { fontFamily: '"Fraunces", Georgia, "Times New Roman", Times, serif' };
 const mono = { fontFamily: '"SFMono-Regular","SF Mono",Menlo,Consolas,"Roboto Mono",monospace' };
 const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif' };
+// One quiet treatment shared by every uppercase label, so they speak in a single
+// voice instead of each inventing its own tracking and weight. Used by <Label>, the
+// stat captions, and the notice eyebrows.
+const overline = { ...sans, textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 };
 
 /* ------------------------------------------------------------------ */
 /*  WAITING ROOM — facts + time estimate                               */
@@ -69,27 +80,27 @@ const sans = { fontFamily: 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif
 // idea each. The user's note was that the old wording had to be read twice, so
 // anything needing a second pass has been split into two simple sentences.
 const FACTS = [
-  "The AI reads your whole script first. So it knows what each line is really about.",
-  "In a hurry? Pick 2 clips per scene instead of 4. It loads twice as fast.",
-  "Change your footage every 3 to 5 seconds. Hold one clip longer and people look away.",
-  "Don't skip photos. A slow zoom on a photo often looks better than a shaky video.",
-  "Your keys stay in your own browser. Nobody else can see them.",
-  "The ZIP names every file in script order. Just drag them into your editor.",
-  "Click a picture to pick that clip. A tick appears and it goes to the bar at the bottom.",
-  "Put your mouse over a clip to preview it. Click Expand to watch it big, with sound.",
-  "Don't like the clips? Shuffle shows more. Regenerate writes a new search.",
-  "You can edit any search yourself. Click it, type, then press Enter.",
-  "Free sites are best at simple things: hands, faces, walking, weather, streets.",
-  "The phone and screen icons flip one scene to tall or wide. The rest stay as they are.",
-  "Pexels gives you 200 searches an hour per key. Add a second key and you get 400.",
-  "The AI reads your script once at the start. After that it just searches.",
-  "Say the line out loud. The place you naturally pause is where the cut belongs.",
-  "Wide shot, then close-up, then a face. Three clips make a scene feel planned.",
-  "Nothing here runs out. This copy is yours to keep.",
-  "If a scene comes back empty, the search was too exact. The tool already tried a wider one.",
-  "Shot list saves a text file of every clip and its scene number. Handy if someone else edits.",
-  "Keep movement going the same way and the cut feels smooth. Flip it and people notice.",
-  "Still working. Long scripts have more scenes, and each one gets its own search.",
+  "The AI reads your whole script first, so it knows what each line is about.",
+  "In a hurry? Choose 2 clips per scene instead of 4. It's twice as fast.",
+  "Change the picture every 3 to 5 seconds. If one clip stays on too long, people stop watching.",
+  "Use photos too. A slow zoom on a good photo often looks better than a shaky video.",
+  "Your keys are saved only in this browser. Nobody else can see them.",
+  "Files in the ZIP are numbered in script order. Drag them straight into your editor.",
+  "To choose a clip, click its picture. A tick shows up and the clip is added to the bar at the bottom.",
+  "Hover over a video to preview it. Click Expand to watch it bigger, with sound.",
+  "Don't like the clips? Shuffle shows different ones. Regenerate tries new search words.",
+  "You can change any search yourself. Click the words, type, then press Enter.",
+  "Free stock sites are best for everyday things: hands, faces, walking, weather, streets.",
+  "The phone and screen buttons on a scene switch just that scene between tall and wide.",
+  "One Pexels key gives you 200 searches an hour. Add a second key and you get 400.",
+  "Once the AI has read your script, the rest is just searching.",
+  "Read the line out loud. Where you naturally pause is where to cut.",
+  "Try a wide shot, then a close-up, then a face. Three clips make a scene feel planned.",
+  "No subscription. This copy of the tool is yours to keep.",
+  "If a scene finds nothing, the search was too specific. The tool already tried a simpler one.",
+  "Shot list saves a text file of every clip you chose and its scene. Handy if someone else edits.",
+  "If things move left in one clip, keep them moving left in the next. Switching direction feels jumpy.",
+  "Still working. Longer scripts have more scenes, and each scene gets its own search.",
 ];
 
 // Rough wall-clock estimate for a run, in seconds. Deliberately a little
@@ -154,6 +165,10 @@ const KEYWORD_BATCH = 10;
 // time, which is what made long scripts take an hour. 6 at once is a big speed-up
 // while staying polite to Pexels and Pixabay (see pacePixabay below).
 const SCENE_POOL = 6;
+
+// How many clips "Download ZIP" fetches at the same time. 3 is a big speed-up
+// over one at a time without flooding a home connection or the Pixabay relay.
+const ZIP_POOL = 3;
 
 // The browser can't see how many Gemini keys the server holds — the whole point
 // of the relay is that it keeps them hidden. So the relay tells us the *count*
@@ -240,20 +255,20 @@ function aiFailMessage(msg) {
     case 410:
       // The relay walked its whole list of model names and Google no longer
       // recognises any of them. Nothing here can fix that.
-      return "Google has withdrawn the AI model this tool uses, so nothing will work until the tool itself is updated. Ask whoever you got it from for the newest version.";
+      return "Google has switched off the AI this tool uses, so the tool needs an update before it can work again. Ask whoever gave you the tool for the latest version.";
     case 404:
       // Vercel's own "no such page" — the relay file was never uploaded.
-      return "The AI part of this tool is missing. The api folder needs to be on GitHub alongside index.html, then redeploy.";
+      return "Part of this tool is missing online. The \"api\" folder has to be on GitHub next to index.html. Add it, then click Redeploy in Vercel.";
     case 400:
     case 401:
     case 403:
-      return "Google rejected the AI key for this tool. In Vercel, open Settings → Environment Variables, check GEMINI_KEY, then Redeploy.";
+      return "Google didn't accept this tool's AI key. In Vercel, go to Settings → Environment Variables, check that GEMINI_KEY is right, then click Redeploy.";
     case 429:
-      return "Google is limiting how fast this tool can ask for keywords. Wait a minute and try again — adding a second Gemini key in Vercel gets rid of this for good.";
+      return "Google is slowing this tool down because it asked too often. Wait a minute and try again. Adding a second Gemini key in Vercel stops this happening.";
     default:
       // Includes "(timeout)", which carries no number at all: Google was asked
       // and simply never answered.
-      return "Google's AI is busy or slow right now, so the keyword step could not finish. Wait a minute and try again.";
+      return "Google's AI is busy right now, so the tool couldn't write the search words. Wait a minute and try again.";
   }
 }
 
@@ -477,40 +492,67 @@ function pexelsPhotoCap(src) {
   return orig + (orig.includes("?") ? "&" : "?") + "auto=compress&cs=tinysrgb&fit=max&w=1920&h=1920";
 }
 
+// The answers to searches already made in this tab, keyed by the search itself
+// (words, page, orientation, count, site and type — never the API key, since
+// every key gets the same answer). Flipping a scene to portrait and back used to
+// search all over again, spending the free hourly quota on results we already
+// had. Shuffle asks for the NEXT page, so it is a different search and always
+// goes out. Only successful answers are kept; a refusal or an error never is.
+const _searchCache = new Map();
+function cachedResults(id) {
+  const hit = _searchCache.get(id);
+  return hit ? hit.slice() : null;
+}
+function rememberResults(id, list) {
+  if (_searchCache.size >= 400) _searchCache.delete(_searchCache.keys().next().value); // drop the oldest
+  _searchCache.set(id, list);
+  return list.slice();
+}
+
 /* ---- Pexels ---- */
 async function pexelsPhotos(q, key, page = 1, orientation = "landscape", perPage = 4) {
-  const r = await fetch(
-    `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&orientation=${orientation}`,
-    { headers: { Authorization: key } }
-  );
+  const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&orientation=${orientation}`;
+  const cached = cachedResults(url);
+  if (cached) return cached;
+  const r = await fetch(url, { headers: { Authorization: key } });
   if (r.status === 401) throw new Error("PEXELS_AUTH");
   if (r.status === 429) throw new Error("PEXELS_RATE");
   if (!r.ok) return [];
   const d = await r.json();
-  return (d.photos || []).map((p) => ({
+  return rememberResults(url, (d.photos || []).map((p) => ({
     id: "px-p-" + p.id,
     type: "photo",
     source: "Pexels",
-    thumb: p.src.large,
+    // The tile is ~230px wide. For a wide photo Pexels' 350px-tall size is still
+    // sharp at that width on a high-density screen, at a third of the weight
+    // (measured 11 KB vs 34 KB). A tall tile is ~410px high, so portrait keeps
+    // the bigger size.
+    thumb: orientation === "landscape" ? p.src.medium || p.src.large : p.src.large,
     download: pexelsPhotoCap(p.src),
     downloadHi: (p.src && (p.src.original || p.src.large2x || p.src.large)) || "",
     url: p.url,
     label: `Pexels Photo #${p.id}`,
-  }));
+  })));
 }
 async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage = 4) {
-  const r = await fetch(
-    `https://api.pexels.com/videos/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&orientation=${orientation}`,
-    { headers: { Authorization: key } }
-  );
+  const url = `https://api.pexels.com/videos/search?query=${encodeURIComponent(q)}&per_page=${perPage}&page=${page}&orientation=${orientation}`;
+  const cached = cachedResults(url);
+  if (cached) return cached;
+  const r = await fetch(url, { headers: { Authorization: key } });
   if (r.status === 401) throw new Error("PEXELS_AUTH");
   if (r.status === 429) throw new Error("PEXELS_RATE");
   if (!r.ok) return [];
   const d = await r.json();
-  return (d.videos || []).map((v) => {
+  return rememberResults(url, (d.videos || []).map((v) => {
     const files = (v.video_files || []).filter((f) => f.file_type === "video/mp4");
-    // Preview stays light (smallest usable file); download aims at ~1080p, not 4K.
-    const sd = files.find((f) => f.quality === "sd") || files[0];
+    // Preview stays light; download aims at ~1080p, not 4K. Pexels usually lists
+    // two "sd" files (640x360 and 960x540) in no fixed order, and taking the first
+    // could land on the heavier one. Take the smallest that is still at least 360
+    // on its short side, so the Expand player never gets a postage stamp.
+    const sdOk = files
+      .filter((f) => f.quality === "sd" && Math.min(f.width || 0, f.height || 0) >= 360)
+      .sort((a, b) => a.width * a.height - b.width * b.height);
+    const sd = sdOk[0] || files.find((f) => f.quality === "sd") || files[0];
     const pick = pickVideoFile(files) || sd;
     const max = pickMaxVideoFile(files) || pick;
     return {
@@ -524,7 +566,7 @@ async function pexelsVideos(q, key, page = 1, orientation = "landscape", perPage
       url: v.url,
       label: `Pexels Video #${v.id}`,
     };
-  });
+  }));
 }
 
 /* ---- Pixabay ---- */
@@ -563,6 +605,10 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPag
   // photos while "4 clips" worked). So we ask for at least 3, then trim back
   // to the count the user actually wanted. Same trick the video call uses.
   const ask = Math.max(3, perPage);
+  // The cache id leaves the key out of the address, so it is never stored anywhere.
+  const cacheId = `pixabay-photos|${q}|${ask}|${page}|${pbOrient}|${perPage}`;
+  const cached = cachedResults(cacheId);
+  if (cached) return cached;
   await pacePixabay();
   const r = await fetch(
     `https://pixabay.com/api/?key=${key}&q=${encodeURIComponent(q)}&per_page=${ask}&page=${page}&image_type=photo&orientation=${pbOrient}`
@@ -570,7 +616,7 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPag
   if (r.status === 429) throw new Error("PIXABAY_RATE");
   if (!r.ok) return [];
   const d = await r.json();
-  return (d.hits || []).slice(0, perPage).map((h) => ({
+  return rememberResults(cacheId, (d.hits || []).slice(0, perPage).map((h) => ({
     id: "pb-p-" + h.id,
     type: "photo",
     source: "Pixabay",
@@ -581,12 +627,15 @@ async function pixabayPhotos(q, key, page = 1, orientation = "landscape", perPag
     downloadHi: h.imageURL || h.fullHDURL || h.largeImageURL,
     url: h.pageURL,
     label: `Pixabay Photo #${h.id}`,
-  }));
+  })));
 }
 async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPage = 4) {
   // Pixabay's video endpoint has no orientation param, so we request a few
   // extra (double the wanted count) and filter by the clip's own width/height
   // on our side, then trim back to perPage.
+  const cacheId = `pixabay-videos|${q}|${perPage}|${page}|${orientation}`;
+  const cached = cachedResults(cacheId);
+  if (cached) return cached;
   await pacePixabay();
   const r = await fetch(
     `https://pixabay.com/api/videos/?key=${key}&q=${encodeURIComponent(q)}&per_page=${perPage * 2}&page=${page}`
@@ -595,7 +644,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
   if (!r.ok) return [];
   const d = await r.json();
   const wantPortrait = orientation === "portrait";
-  return (d.hits || [])
+  return rememberResults(cacheId, (d.hits || [])
     .map((h) => {
       const vids = h.videos || {};
       const dim = vids.large || vids.medium || vids.small || vids.tiny || {};
@@ -606,16 +655,24 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
         .map((f) => ({ link: f.url, width: f.width || 0, height: f.height || 0 }));
       const pick = pickVideoFile(files);
       const max = pickMaxVideoFile(files);
+      // Each size of a Pixabay clip has its own still, as big as that size. The
+      // tile is ~230px wide, so the "tiny" one (960x540) is already more than
+      // sharp enough — measured 20 KB against 131 KB for "large" on the same clip,
+      // and "large" is a full 4K frame on newer uploads.
       const thumb =
-        vids.large?.thumbnail ||
+        vids.tiny?.thumbnail ||
+        vids.small?.thumbnail ||
         vids.medium?.thumbnail ||
+        vids.large?.thumbnail ||
         (h.picture_id ? `https://i.vimeocdn.com/video/${h.picture_id}_640x360.jpg` : "");
       return {
         id: "pb-v-" + h.id,
         type: "video",
         source: "Pixabay",
         thumb,
-        preview: vids.small?.url || vids.tiny?.url || vids.medium?.url || "",
+        // Same idea for the hover preview and the Expand player: 960x540 fills
+        // both, at well under half the download (measured 427 KB vs 1.03 MB).
+        preview: vids.tiny?.url || vids.small?.url || vids.medium?.url || "",
         download: (pick && pick.link) || vids.medium?.url || vids.small?.url || vids.large?.url || "",
         downloadHi: (max && max.link) || vids.large?.url || (pick && pick.link) || "",
         url: h.pageURL,
@@ -625,7 +682,7 @@ async function pixabayVideos(q, key, page = 1, orientation = "landscape", perPag
     })
     .filter((r) => r._portrait === wantPortrait)
     .slice(0, perPage)
-    .map(({ _portrait, ...r }) => r);
+    .map(({ _portrait, ...r }) => r));
 }
 
 // Progressively broader versions of a rich query, so a very specific search
@@ -941,10 +998,59 @@ function Toggle({ active, onClick, children, icon: Icon }) {
   );
 }
 
+// A section heading — the quiet overline shared across the whole app.
 function Label({ children }) {
   return (
-    <div style={{ ...mono, color: C.muted, letterSpacing: "0.12em" }} className="text-[10px] uppercase mb-2">
+    <div style={{ ...overline, color: C.muted }} className="text-[10px] mb-2">
       {children}
+    </div>
+  );
+}
+
+// A sub-label for an individual control inside a section: sentence case, calm,
+// sits directly above its field. Used for the option groups and the wizard fields
+// so those no longer shout in a second row of uppercase.
+function FieldLabel({ children }) {
+  return (
+    <div style={{ ...sans, color: C.inkSoft }} className="text-[11px] font-medium mb-1.5">
+      {children}
+    </div>
+  );
+}
+
+/* One shared shape for every inline advisory — the long-script heads-up and any
+   caution the app needs to raise inline. It speaks in the same grammar as the toast
+   that slides up from the corner: a tinted round icon, a quiet eyebrow, then the
+   message in plain sans. Each notice used to draw its own coloured left border; this
+   is the single place that look now lives. */
+const NOTICE_TONES = {
+  info: { accent: (c) => c.brown, icon: Info },
+  warn: { accent: (c) => c.amber, icon: AlertTriangle },
+  error: { accent: (c) => c.red, icon: AlertTriangle },
+};
+function Notice({ tone = "info", title, icon, children, action, className = "" }) {
+  const t = NOTICE_TONES[tone] || NOTICE_TONES.info;
+  const accent = t.accent(C);
+  const Icon = icon || t.icon;
+  const tintAlpha = C === DARK ? "2e" : "1a"; // ~18% on dark, ~10% on light
+  return (
+    <div
+      style={{ backgroundColor: C.card, border: `1px solid ${C.line}` }}
+      className={`rounded-xl px-4 py-3.5 flex items-start gap-3 ${className}`}
+    >
+      <div
+        style={{ backgroundColor: accent + tintAlpha }}
+        className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+      >
+        <Icon size={14} style={{ color: accent }} />
+      </div>
+      <div className="min-w-0 flex-1">
+        {title && <div style={{ ...overline, color: C.muted }} className="text-[9px]">{title}</div>}
+        <div style={{ ...sans, color: C.inkSoft }} className="text-[12.5px] leading-[1.55] mt-0.5">
+          {children}
+        </div>
+        {action && <div className="mt-2">{action}</div>}
+      </div>
     </div>
   );
 }
@@ -971,6 +1077,268 @@ function KeywordInput({ value, onCommit }) {
     />
   );
 }
+
+// Sits between every pair of scenes and once at the end. Deliberately quiet — a
+// dashed seam that lights up under the cursor — so a hundred of them down a long
+// script read as hairlines rather than clutter. On touch there is no cursor to
+// light it up, so the ff-seam rules bring it most of the way out and fatten it.
+function PlusRow({ at, act }) {
+  return (
+    <button
+      onClick={() => act.current.insertScene(at)}
+      title="Add your own search here"
+      className="ff-seam w-full flex items-center gap-2 opacity-30 hover:opacity-100 transition-opacity"
+    >
+      <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
+      <span
+        style={{ ...sans, border: `1px dashed ${C.line}`, backgroundColor: C.card, color: C.brown }}
+        className="ff-chip inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium"
+      >
+        <Plus size={10} /> Add a search
+      </span>
+      <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
+    </button>
+  );
+}
+
+// What a scene with nothing ticked is handed, so every such card gets the same
+// object and never redraws just because a new empty one was made.
+const NO_PICKS = { set: new Set(), sig: "" };
+
+/* One scene: its line, its search, its tools and its clips.
+
+   Its own component so that it redraws ONLY when something about THIS scene
+   changes. Before, every scene and every thumbnail on the page redrew on every
+   change anywhere — one clip picked, one letter typed into the script, the
+   countdown ticking once a second during a run. Measured on a 120-scene run:
+   0.34–0.53s per pick and 0.22–0.29s per typed letter, and during a run the
+   page was asked to redraw about six times a second, more than it could keep up
+   with. Now a pick redraws one card.
+
+   What it is told about the rest of the page:
+     total       — the scene count, for zero-padding download file numbers
+     picked      — which of this scene's clips are ticked (pickedSig is the
+                   same list as text, so it can be compared cheaply)
+     act         — a ref holding the page's handlers. The ref never changes, so
+                   it never forces a redraw, and act.current always holds the
+                   newest version of each handler.
+   theme is passed even though colours are read from C, so that flipping light
+   and dark still redraws every card. */
+const SceneCard = React.memo(function SceneCard({ s, i, total, busy, isEditing, picked, orientation, quality, act }) {
+  return (
+    <React.Fragment>
+      <PlusRow at={i} act={act} />
+      <div style={{ backgroundColor: C.cardAlt, border: `1px solid ${C.line}`, contentVisibility: "auto", containIntrinsicSize: "1px 640px" }} className="ff-scene rounded-lg overflow-hidden">
+        {/* scene head */}
+        <div className="px-4 pt-3.5 pb-3">
+          <div className="ff-head flex items-start gap-3">
+            {/* the scene number is a display moment — serif, like the stat
+                numerals — not working-UI text, so it reads as a heading for
+                the row rather than another label. */}
+            <span style={{ ...serif, color: C.brown }} className="text-[15px] font-semibold pt-0.5 tabular-nums">{String(i + 1).padStart(2, "0")}</span>
+            <div className="flex-1 min-w-0">
+              <div style={{ color: s.inserted ? C.muted : C.ink, fontStyle: s.inserted ? "italic" : "normal" }} className="text-[14px] leading-snug">{s.line}</div>
+              <div className="flex items-center gap-2 mt-1.5">
+                <span style={{ color: C.muted }}>→</span>
+                {isEditing ? (
+                  <KeywordInput value={s.keyword} onCommit={(kw) => act.current.applyKeyword(s, kw)} />
+                ) : (
+                  <button
+                    onClick={() => act.current.setEditing(s.id)}
+                    style={{ ...mono, color: C.inkSoft }}
+                    className="text-[11px] inline-flex items-center gap-1.5 group"
+                    title="Click to change these search words"
+                  >
+                    {s.keyword ? `"${s.keyword}"` : "type your search here"}
+                    <span
+                      style={{ ...sans, color: C.brown, border: `1px solid ${C.line}`, backgroundColor: C.card }}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium group-hover:opacity-80"
+                    >
+                      <Pencil size={9} /> edit
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="ff-tools flex items-center gap-1.5">
+              {(() => { const ori = s.orientation || orientation; return (
+                <div style={{ border: `1px solid ${C.line}`, backgroundColor: C.card }} className="flex rounded overflow-hidden mr-0.5">
+                  <button onClick={() => act.current.setSceneOrientation(s, "landscape")} disabled={busy} title="Wide footage, for this scene only" style={{ backgroundColor: ori === "landscape" ? C.brown : "transparent", color: ori === "landscape" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Monitor size={13} /></button>
+                  <button onClick={() => act.current.setSceneOrientation(s, "portrait")} disabled={busy} title="Tall footage, for this scene only" style={{ backgroundColor: ori === "portrait" ? C.brown : "transparent", color: ori === "portrait" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Smartphone size={13} /></button>
+                </div>
+              ); })()}
+              <button onClick={() => act.current.shuffleScene(s)} disabled={busy} title="Shuffle: show different clips for the same search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Shuffle size={13} /></button>
+              {s.inserted ? (
+                // This one's yours, not the AI's. There's no script line behind it
+                // to spin a fresh angle from, so the slot removes it instead.
+                <button onClick={() => act.current.removeScene(s.id)} disabled={busy} title="Remove this search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Trash2 size={13} /></button>
+              ) : (
+                <button onClick={() => act.current.regenScene(s)} disabled={busy} title="Regenerate: let the AI try new search words" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><RefreshCw size={13} className={busy ? "animate-spin" : ""} /></button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* grid */}
+        <div className="px-4 pb-3 relative">
+          {busy && (
+            <div style={{ backgroundColor: C.veil }} className="absolute inset-0 z-10 flex items-center justify-center rounded">
+              <Loader2 className="animate-spin" style={{ color: C.brown }} size={20} />
+            </div>
+          )}
+          {s.results.length === 0 ? (
+            // A card that's still waiting its turn says so, instead of
+            // wrongly telling you there's nothing to find.
+            s.loading ? (
+              <div style={{ ...sans, color: C.muted }} className="ff-pending text-[12px] py-6 text-center flex items-center justify-center gap-2">
+                <Loader2 className="animate-spin" size={13} /> Finding footage…
+              </div>
+            ) : !s.keyword || !s.keyword.trim() ? (
+              // A row you added yourself, before you've typed anything into
+              // it. Telling this one to "try Regenerate" would be useless —
+              // it has no Regenerate button, and nothing to rewrite.
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Type what you want to see above, then press Enter.</div>
+            ) : s.inserted ? (
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Nothing found. Click the words above to change them, or press Shuffle.</div>
+            ) : (
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Nothing found. Press Shuffle or Regenerate to try again.</div>
+            )
+          ) : (
+            // Always the neat responsive grid — 2 columns on phones, 4 on
+            // desktop — no matter the clips-per-scene setting. (It used to
+            // narrow to 2 columns for "2 clips" back when that meant only 2
+            // tiles; now "2 clips" can be 6-8 tiles per source, so it needs
+            // the same tidy 4-wide layout that "4 clips" uses.)
+            <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
+              {s.results.map((r) => {
+                const sel = picked.has(r.id);
+                return (
+                  <div
+                    key={r.id}
+                    onClick={() => act.current.toggleSel(r, s.id)}
+                    title={sel ? "Chosen. Click again to remove it." : "Click to choose this clip."}
+                    onMouseEnter={(e) => {
+                      const v = e.currentTarget.querySelector("video");
+                      if (!v) return;
+                      v.style.opacity = "1";   // make visible BEFORE play()...
+                      v.dataset.hover = "1";
+                      // The clip is only attached now, on hover (see the <video> below).
+                      if (!v.getAttribute("src")) v.src = v.dataset.src;
+                      requestAnimationFrame(() => {   // ...and wait one frame so Chrome sees it as visible, else it pauses muted video as hidden "background media"
+                        if (v.dataset.hover !== "1") return; // mouse already left
+                        try { v.currentTime = 0; } catch {}
+                        const p = v.play();
+                        if (p && p.catch) p.catch(() => {});
+                      });
+                    }}
+                    onMouseLeave={(e) => {
+                      const v = e.currentTarget.querySelector("video");
+                      if (!v) return;
+                      v.dataset.hover = "";
+                      v.style.opacity = "0";
+                      v.pause();
+                      try { v.currentTime = 0; } catch {}
+                      // A paused clip kept downloading in the background and held
+                      // on to its player, so sweeping the mouse across a page of
+                      // tiles left dozens of them running. Let go of the clip once
+                      // the 200ms fade-out has finished — unless the mouse came
+                      // straight back, in which case it is playing again.
+                      setTimeout(() => {
+                        if (v.dataset.hover === "1" || !v.getAttribute("src")) return;
+                        v.removeAttribute("src");
+                        v.load();
+                      }, 250);
+                    }}
+                    className="ff-tile group relative rounded-md overflow-hidden cursor-pointer"
+                    style={{ aspectRatio: (s.orientation || orientation) === "portrait" ? "9/16" : "16/10", border: sel ? `2px solid ${C.brown}` : `1px solid ${C.line}`, backgroundColor: C.thumbBg }}
+                  >
+                    {r.thumb ? (
+                      <img src={r.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center"><Film size={18} style={{ color: C.muted }} /></div>
+                    )}
+                    {/* hover-to-preview inline video (muted, loops). Opacity is driven
+                        by the tile's mouseenter/leave handlers, not group-hover, so the
+                        element is visible at the moment play() runs — otherwise Chrome
+                        pauses it as hidden "background media".
+
+                        No src and no poster until the mouse arrives. The poster
+                        used to download every video's thumbnail the moment the
+                        page drew — measured, all 960 on a 120-scene run, while the
+                        lazy <img> above fetched only the 3 scenes on screen — and
+                        on a phone, where there is no hover, all of it was wasted.
+                        The poster was never seen anyway: until the first frame
+                        arrives, an empty player is see-through, so the same
+                        thumbnail shows from the <img> underneath it. */}
+                    {r.type === "video" && r.preview && (
+                      <video
+                        data-src={r.preview}
+                        muted
+                        loop
+                        playsInline
+                        preload="none"
+                        style={{ opacity: 0 }}
+                        className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200 pointer-events-none"
+                      />
+                    )}
+                    {/* type tag */}
+                    <span
+                      style={{ backgroundColor: r.type === "video" ? "rgba(57,39,26,0.9)" : C.green, ...sans }}
+                      className="absolute top-1.5 left-1.5 text-[9px] text-white px-1.5 py-0.5 rounded font-medium capitalize flex items-center gap-1"
+                    >
+                      {r.type === "video" ? <Play size={7} /> : <span className="w-1.5 h-1.5 bg-white inline-block rounded-[1px]" />}
+                      {r.type}
+                    </span>
+                    {/* selected check */}
+                    {sel && (
+                      <span style={{ backgroundColor: C.brown }} className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full flex items-center justify-center">
+                        <Check size={10} color="#fff" />
+                      </span>
+                    )}
+                    {/* Action bar. On a mouse it fades in on hover; on a touch screen
+                        the ff-* classes above pin it open and shrink it to icons, since
+                        there is no hover to reveal it and no room for three labels. */}
+                    <div style={{ background: "linear-gradient(to top, rgba(57,39,26,0.92), rgba(57,39,26,0.15) 55%, transparent)" }} className="ff-actions absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end pointer-events-none">
+                      <div className="ff-bar p-2">
+                        <div style={{ ...sans }} className="ff-src text-[9px] text-white/85 mb-1 truncate">{r.label}</div>
+                        <div className="flex items-center gap-1.5">
+                          {r.type === "video" && r.preview && (
+                            <button onClick={(e) => { e.stopPropagation(); act.current.setPlaying({ ...r, _seq: i + 1, _total: total, _kw: s.keyword }); }} title="Watch this clip bigger, with sound" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                              <Play size={9} /> <span className="ff-lbl">Expand</span>
+                            </button>
+                          )}
+                          <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, total, s.keyword, quality); }} title="Download this clip now. (To choose it for later, click the picture instead.)" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                            <Download size={9} /> <span className="ff-lbl">Download</span>
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="Open this clip's page on the stock site" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                            <ExternalLink size={9} /> <span className="ff-lbl">View</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* scene foot */}
+        <div style={{ borderTop: `1px solid ${C.line}` }} className="px-4 py-2 flex items-center justify-between">
+          <span style={{ ...sans, color: C.muted }} className="text-[11px]">{s.results.length} results</span>
+          <div className="ff-foot flex items-center gap-1.5">
+            <button onClick={() => act.current.selectAll(s)} style={{ ...sans, border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="text-[11px] font-medium px-2.5 py-1 rounded hover:opacity-80">Select all</button>
+            <button onClick={() => act.current.clearScene(s)} style={{ ...sans, border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="text-[11px] font-medium px-2.5 py-1 rounded hover:opacity-80">Clear</button>
+          </div>
+        </div>
+      </div>
+    </React.Fragment>
+  );
+}, (a, b) =>
+  a.s === b.s && a.i === b.i && a.total === b.total && a.busy === b.busy &&
+  a.isEditing === b.isEditing && a.pickedSig === b.pickedSig &&
+  a.orientation === b.orientation && a.quality === b.quality && a.theme === b.theme
+);
 
 /* ------------------------------------------------------------------ */
 /*  MAIN                                                               */
@@ -1015,7 +1383,7 @@ function FootageFinder() {
   const [script, setScript] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(null);
-  const [status, setStatus] = useState("Paste your script and hit Analyse. Keys are saved.");
+  const [status, setStatus] = useState("Paste your script, then press Analyse.");
   const [statusErr, setStatusErr] = useState(false);
   const [scenes, setScenes] = useState([]);
   const [selected, setSelected] = useState({});
@@ -1100,10 +1468,10 @@ function FootageFinder() {
         // days away. "Welcome back" read as odd when it appeared right after F5.
         setStatus(
           n
-            ? `Your last run is still here — ${n} scene${n === 1 ? "" : "s"}. Analyse again to start over.`
+            ? `Your last results are still here (${n} scene${n === 1 ? "" : "s"}). Press Analyse to start again.`
             : w && w.script
-            ? "Your script is still here. Hit Analyse when you're ready."
-            : "Paste a script and hit Analyse."
+            ? "Your script is still here. Press Analyse when you're ready."
+            : "Paste your script, then press Analyse."
         );
       }
       setBooted(true);
@@ -1172,14 +1540,43 @@ function FootageFinder() {
 
   const selectedCount = Object.keys(selected).length;
 
+  // The ticks grouped by scene, worked out once per change to the selection
+  // rather than once per thumbnail. Each scene card is handed only its own
+  // ticks, so picking a clip in scene 3 leaves every other card alone.
+  const pickedByScene = useMemo(() => {
+    const ids = new Map();
+    for (const k of Object.keys(selected)) {
+      const at = k.indexOf("|"); // selKey() is "sceneId|clipId"
+      const sid = k.slice(0, at);
+      if (!ids.has(sid)) ids.set(sid, []);
+      ids.get(sid).push(k.slice(at + 1));
+    }
+    const out = new Map();
+    ids.forEach((list, sid) => {
+      list.sort();
+      out.set(sid, { set: new Set(list), sig: list.join(",") });
+    });
+    return out;
+  }, [selected]);
+
+  // The rough scene count of the pasted script. Two notices below need it, and
+  // it was being worked out twice on every redraw — including every second of
+  // the countdown — instead of once whenever the script actually changes.
+  const roughSceneCount = useMemo(() => (splitIntoScenes(script) || []).length, [script]);
+
+  // The scene cards call the page's handlers through this. The ref itself never
+  // changes (so it never makes a card redraw), and it is refreshed on every
+  // render below, so a card always reaches the newest version of each handler.
+  const act = useRef(null);
+
   // Countdown text under the progress bar. Falls back to a plain elapsed counter if
   // we never got an estimate, so it always says something truthful.
   const elapsedSec = startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : 0;
   const etaLabel = (() => {
-    if (!etaSec) return `Working... ${fmtDuration(elapsedSec)} elapsed`;
+    if (!etaSec) return `Working… ${fmtDuration(elapsedSec)} so far`;
     const left = etaSec - elapsedSec;
-    if (left <= 0) return `Almost there — ${fmtDuration(elapsedSec)} elapsed`;
-    return `About ${fmtDuration(left)} left · ${fmtDuration(elapsedSec)} elapsed`;
+    if (left <= 0) return `Almost done… ${fmtDuration(elapsedSec)} so far`;
+    return `About ${fmtDuration(left)} to go · ${fmtDuration(elapsedSec)} so far`;
   })();
 
   /* start over */
@@ -1191,7 +1588,7 @@ function FootageFinder() {
   // some of the picked clips may not be downloaded yet. Only asks when there is
   // actually something to lose.
   function startNew() {
-    if ((script.trim() || scenes.length) && !confirm("Clear this script and its footage, and start a new video?")) return;
+    if ((script.trim() || scenes.length) && !confirm("Clear this script and all its clips, and start a new video?")) return;
     setScript("");
     setScenes([]);
     setSelected({});
@@ -1215,7 +1612,7 @@ function FootageFinder() {
       return;
     }
     if (!(sources.pexels && pexelsKeys.length) && !(sources.pixabay && pixabayKeys.length)) {
-      setStatus("Connect an active source (Pexels or Pixabay) in Settings first.");
+      setStatus("Turn on Pexels or Pixabay first. If neither has a key yet, add one in Settings (the gear button).");
       setStatusErr(true);
       return;
     }
@@ -1235,7 +1632,7 @@ function FootageFinder() {
     try {
       // Break the script into filmable beats via the AI (one action per scene).
       // Fall back to the coarse sentence splitter if that step fails for any reason.
-      setProgress({ pct: 4, label: "Breaking your script into scenes..." });
+      setProgress({ pct: 4, label: "Splitting your script into scenes…" });
       let lines;
       try {
         lines = await segmentScript(script);
@@ -1258,12 +1655,12 @@ function FootageFinder() {
       // same number of requests at exactly the same rate as the old one-at-a-time
       // loop — it just stops waiting for each reply before sending the next.
       let doneBatches = 0;
-      setProgress({ pct: 6, label: `Analysing ${batches.length} batch${batches.length === 1 ? "" : "es"} with full context...` });
+      setProgress({ pct: 6, label: `Writing search words for each scene…` });
       const settledBatches = await Promise.allSettled(
         batches.map((b) =>
           generateKeywords(script, b).then((r) => {
             doneBatches++;
-            setProgress({ pct: 6 + (doneBatches / batches.length) * 29, label: `Keywords: batch ${doneBatches}/${batches.length} done...` });
+            setProgress({ pct: 6 + (doneBatches / batches.length) * 29, label: `Writing search words… ${Math.round((doneBatches / batches.length) * 100)}% done` });
             return r;
           })
         )
@@ -1291,15 +1688,23 @@ function FootageFinder() {
         perScene,
         loading: true,
       }));
-      setScenes(acc.map((s) => ({ ...s })));
-      let rateHit = false, finished = 0, dirty = false;
+      let shown = acc.map((s) => ({ ...s }));
+      setScenes(shown);
+      let rateHit = false, finished = 0;
       // Redraw at most a few times a second rather than once per finished scene:
       // with 100 scenes that's the difference between a smooth fill and a stutter.
+      //
+      // Only the scenes that finished since the last redraw get a fresh copy.
+      // Every other card keeps the very same object it already had, which is
+      // what lets it skip redrawing (see SceneCard). Copying all of them every
+      // 400ms made every card on the page redraw, finished or not.
+      const changed = new Set();
       const flush = () => {
-        if (dirty) {
-          dirty = false;
-          setScenes(acc.map((s) => ({ ...s })));
-        }
+        if (!changed.size) return;
+        shown = shown.slice();
+        changed.forEach((i) => { shown[i] = { ...acc[i] }; });
+        changed.clear();
+        setScenes(shown);
       };
       const flushTimer = setInterval(flush, 400);
       try {
@@ -1337,9 +1742,9 @@ function FootageFinder() {
               else throw err; // real errors (auth, Claude) still abort
             }
             acc[i].loading = false;
-            dirty = true;
+            changed.add(i);
             finished++;
-            setProgress({ pct: 35 + (finished / acc.length) * 65, label: `Finding footage — ${finished}/${acc.length} scenes done` });
+            setProgress({ pct: 35 + (finished / acc.length) * 65, label: `Finding clips… ${finished} of ${acc.length} scenes done` });
           }
         };
         const settled = await Promise.allSettled(
@@ -1356,8 +1761,7 @@ function FootageFinder() {
         // was showing, but twelve cards were still breathing away as if they
         // were working. That is the "it never gives me the footage" symptom.
         // Measured 2026-09-02: run ended at ~21s, cards still pending at 110s.
-        acc.forEach((s) => { s.loading = false; });
-        dirty = true;
+        acc.forEach((s, i) => { if (s.loading) { s.loading = false; changed.add(i); } });
         flush();
       }
       const total = acc.reduce((n, s) => n + s.results.length, 0);
@@ -1368,24 +1772,24 @@ function FootageFinder() {
       if (aiTrouble.wrote === 0 && aiTrouble.fellBack > 0) {
         // Nothing came back from the AI all run. The clips on screen were found
         // using the script's own sentences, which is a much rougher search.
-        setStatus(aiFailMessage(aiTrouble.reason) + ` Meanwhile the tool searched using your own sentences, so these ${total} clips are a rough guess.`);
+        setStatus(aiFailMessage(aiTrouble.reason) + ` For now the tool searched with your own sentences instead, so these ${total} clips may not match well.`);
         setStatusErr(true);
       } else if (rateHit) {
-        setStatus(`Done, but Pexels hit its free hourly request limit partway through, so some scenes have few or no results. Wait a few minutes, then use each scene's Shuffle to fill them in. (${total} results across ${acc.length} scenes.)`);
+        setStatus(`Done, but Pexels' free hourly limit ran out partway through, so some scenes have few or no clips. Wait a few minutes, then press Shuffle on those scenes. (${total} clips across ${acc.length} scenes.)`);
         setStatusErr(true);
       } else if (aiTrouble.fellBack > 0) {
         // The AI worked for most scenes but skipped some. Name how many, and
         // point at the button that fixes them one at a time.
-        setStatus(`Done — ${total} results across ${acc.length} scenes. The AI skipped ${aiTrouble.fellBack} scene${aiTrouble.fellBack === 1 ? "" : "s"}, which searched using your own words instead — press Regenerate on any card that looks wrong.`);
+        setStatus(`Done: ${total} clips across ${acc.length} scenes. The AI missed ${aiTrouble.fellBack} scene${aiTrouble.fellBack === 1 ? "" : "s"}, so ${aiTrouble.fellBack === 1 ? "it was" : "those were"} searched with your own words. If a scene looks wrong, press its Regenerate button.`);
         setStatusErr(true);
       } else {
-        setStatus(`Done — ${total} results across ${acc.length} scenes.`);
+        setStatus(`Done: ${total} clips across ${acc.length} scenes.`);
         setStatusErr(false);
       }
     } catch (e) {
-      if (e.message === "PEXELS_AUTH") setStatus("Your Pexels API key was rejected. Open Settings and check it.");
+      if (e.message === "PEXELS_AUTH") setStatus("Pexels didn't accept your key. Open Settings (the gear button) and check it.");
       else if (e.message?.includes("Claude")) setStatus(aiFailMessage(e.message));
-      else setStatus("Something went wrong while analysing. Try again.");
+      else setStatus("Something went wrong. Please try again.");
       setStatusErr(true);
     } finally {
       setAnalyzing(false);
@@ -1400,7 +1804,7 @@ function FootageFinder() {
   // Shared message when a per-scene re-search can't get anything because Pexels
   // is rate-limited and Pixabay had nothing. Without this the scene silently
   // keeps its old footage and the button looks broken.
-  const RATE_MSG = "Pexels hit its free hourly request limit, so new footage couldn't load. Wait a few minutes and try again (a big script uses up the hourly quota fast).";
+  const RATE_MSG = "Pexels' free hourly limit has run out for now, so new clips couldn't load. Wait a few minutes and try again. Long scripts use up the limit faster.";
   function noteSceneError(e) {
     if (e && e.message === "PEXELS_RATE") { setStatus(RATE_MSG); setStatusErr(true); }
   }
@@ -1490,7 +1894,7 @@ function FootageFinder() {
       const next = list.slice();
       next.splice(at, 0, {
         id,
-        line: "Extra search — added by you",
+        line: "Your own extra search",
         keyword: "",
         page: 1,
         results: [],
@@ -1503,28 +1907,6 @@ function FootageFinder() {
     });
     setEditing(id);
   }
-
-  // Sits between every pair of scenes and once at the end. Deliberately quiet — a
-  // dashed seam that lights up under the cursor — so a hundred of them down a long
-  // script read as hairlines rather than clutter. On touch there is no cursor to
-  // light it up, so the ff-seam rules bring it most of the way out and fatten it.
-  const plusRow = (at) => (
-    <button
-      onClick={() => insertScene(at)}
-      title="Insert an extra search here"
-      style={{ ...mono }}
-      className="ff-seam w-full flex items-center gap-2 opacity-30 hover:opacity-100 transition-opacity"
-    >
-      <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
-      <span
-        style={{ border: `1px dashed ${C.line}`, backgroundColor: C.card, color: C.brown }}
-        className="ff-chip inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] uppercase tracking-wide"
-      >
-        <Plus size={10} /> Add a search
-      </span>
-      <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
-    </button>
-  );
 
   // Your picks, walked in script order rather than in the order you happened to
   // click them — so file numbers and the shot list read top-to-bottom like the
@@ -1571,23 +1953,35 @@ function FootageFinder() {
     try {
       const JSZip = await loadJSZip();
       const zip = new JSZip();
+      // Fetch ZIP_POOL clips at a time instead of one after another, since most of
+      // each fetch is just waiting on the network. The files still go into the zip
+      // afterwards in script order, with the same names as before.
+      const blobs = new Array(picks.length).fill(null);
+      let cursor = 0, fetched = 0;
+      const worker = async () => {
+        for (;;) {
+          const i = cursor++;
+          if (i >= picks.length) return;
+          try { blobs[i] = await fetchClipBlob(picks[i].item, quality); } catch { blobs[i] = null; }
+          fetched++;
+          setZipping({ done: fetched, total: picks.length });
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(ZIP_POOL, picks.length) }, worker));
       const used = {};
       let ok = 0, failed = 0;
       for (let i = 0; i < picks.length; i++) {
+        if (!blobs[i]) { failed++; continue; }
         const it = picks[i].item;
-        try {
-          const blob = await fetchClipBlob(it, quality);
-          let name = clipFileName(it, picks[i].seq, scenes.length, picks[i].keyword);
-          // Guard against two clips resolving to the same filename inside the zip.
-          if (used[name]) name = name.replace(/(\.[a-z0-9]+)$/i, `_${i + 1}$1`);
-          used[name] = 1;
-          zip.file(name, blob);
-          ok++;
-        } catch { failed++; }
-        setZipping({ done: i + 1, total: picks.length });
+        let name = clipFileName(it, picks[i].seq, scenes.length, picks[i].keyword);
+        // Guard against two clips resolving to the same filename inside the zip.
+        if (used[name]) name = name.replace(/(\.[a-z0-9]+)$/i, `_${i + 1}$1`);
+        used[name] = 1;
+        zip.file(name, blobs[i]);
+        ok++;
       }
       if (!ok) {
-        setStatus("Couldn't fetch any of the selected clips to zip — check your connection, or use Files to save them one by one.");
+        setStatus("Couldn't download any of the chosen clips. Check your internet, or press Files to download them one by one.");
         setStatusErr(true);
         return;
       }
@@ -1603,11 +1997,11 @@ function FootageFinder() {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 3000);
       setStatus(failed
-        ? `Zipped ${ok} clip${ok > 1 ? "s" : ""}. ${failed} couldn't be fetched and were skipped — grab those with Files.`
-        : `Zipped ${ok} clip${ok > 1 ? "s" : ""} into one file. ✓`);
+        ? `ZIP ready with ${ok} clip${ok > 1 ? "s" : ""}. ${failed} couldn't be downloaded and ${failed > 1 ? "were" : "was"} left out. You can try again with the Files button.`
+        : `ZIP ready: ${ok} clip${ok > 1 ? "s" : ""} in one file. ✓`);
       setStatusErr(false);
     } catch {
-      setStatus("The zip helper couldn't load. Your clips are safe — use Files to save them individually.");
+      setStatus("The ZIP maker couldn't load. Your clips are fine. Press Files to download them one by one.");
       setStatusErr(true);
     } finally {
       setZipping(null);
@@ -1634,6 +2028,11 @@ function FootageFinder() {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
+
+  act.current = {
+    applyKeyword, setEditing, setSceneOrientation, shuffleScene, removeScene,
+    regenScene, toggleSel, selectAll, clearScene, setPlaying, insertScene,
+  };
 
   /* ---------------------------------------------------------------- */
   if (!booted)
@@ -1674,7 +2073,7 @@ function FootageFinder() {
             quality,
           });
           setStage("app");
-          setStatus("All set. Paste your script and hit Analyse.");
+          setStatus("All set. Paste your script, then press Analyse.");
         }}
       />
     );
@@ -1736,7 +2135,7 @@ function FootageFinder() {
               <Info size={14} style={{ color: C.brown }} />
             </div>
             <div className="flex-1 pt-[1px]">
-              <div style={{ ...mono, color: C.muted, letterSpacing: "0.12em" }} className="text-[9px] uppercase">
+              <div style={{ ...overline, color: C.muted }} className="text-[9px]">
                 Heads up
               </div>
               <div style={{ ...sans, color: C.inkSoft }} className="text-[12.5px] leading-[1.55] mt-1">
@@ -1772,11 +2171,11 @@ function FootageFinder() {
                   {toolName.split(" ").slice(1).join(" ") || "Finder"}
                 </span>
               </h1>
-              <div style={{ ...mono, color: C.muted, letterSpacing: "0.06em" }} className="text-[10px] uppercase mt-1.5">
-                AI-Powered Stock Footage Finder — Pexels{pixabayKey ? " & Pixabay" : ""}
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] mt-1.5">
+                AI-powered stock footage finder · Pexels{pixabayKey ? " & Pixabay" : ""}
               </div>
               {creator && (
-                <div style={{ ...mono, color: C.muted }} className="text-[10px] mt-1">
+                <div style={{ ...sans, color: C.muted }} className="text-[11px] mt-1">
                   Built by <span style={{ color: C.brown }} className="font-semibold">{creator}</span>
                 </div>
               )}
@@ -1826,7 +2225,7 @@ function FootageFinder() {
           <textarea
             value={script}
             onChange={(e) => { setScript(e.target.value); if (!e.target.value.trim()) setDismissWarn(false); }}
-            placeholder="Paste your script here. Each sentence is read in context — the AI sees the line before and after to find footage that fits the exact moment, not just the words..."
+            placeholder="Paste your script here. The AI reads all of it, then finds clips that fit what each line means, not just its words…"
             style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, color: C.ink, ...sans }}
             className="w-full h-44 rounded-lg p-4 text-[14px] leading-relaxed resize-y outline-none focus:border-amber-700"
           />
@@ -1838,77 +2237,74 @@ function FootageFinder() {
             <Label>Options</Label>
             <div style={{ borderTop: `1px solid ${C.line}` }} className="flex-1 -mt-2" />
           </div>
-          <div className="flex flex-wrap gap-x-12 gap-y-4">
+          <div className="flex flex-wrap gap-x-10 gap-y-5">
             <div>
-              <Label>Media Type</Label>
+              <FieldLabel>Media type</FieldLabel>
               <div className="flex gap-2">
                 <Toggle icon={Play} active={mediaTypes.videos} onClick={() => { const n = { ...mediaTypes, videos: !mediaTypes.videos }; if (!n.videos && !n.photos) return; setMediaTypes(n); saveAll({ mediaTypes: n }); }}>Videos</Toggle>
                 <Toggle icon={ImageIcon} active={mediaTypes.photos} onClick={() => { const n = { ...mediaTypes, photos: !mediaTypes.photos }; if (!n.videos && !n.photos) return; setMediaTypes(n); saveAll({ mediaTypes: n }); }}>Photos</Toggle>
               </div>
             </div>
             <div>
-              <Label>Source</Label>
+              <FieldLabel>Source</FieldLabel>
               <div className="flex gap-2">
                 <Toggle active={sources.pexels} onClick={() => { if (!pexelsKey) return; const n = { ...sources, pexels: !sources.pexels }; setSources(n); saveAll({ sources: n }); }}>Pexels</Toggle>
                 <Toggle active={sources.pixabay} onClick={() => { if (!pixabayKey) return; const n = { ...sources, pixabay: !sources.pixabay }; setSources(n); saveAll({ sources: n }); }}>Pixabay</Toggle>
               </div>
             </div>
             <div>
-              <Label>Orientation</Label>
+              <FieldLabel>Orientation</FieldLabel>
               <div className="flex gap-2">
                 <Toggle icon={Monitor} active={orientation === "landscape"} onClick={() => { setOrientation("landscape"); saveAll({ orientation: "landscape" }); }}>Landscape</Toggle>
                 <Toggle icon={Smartphone} active={orientation === "portrait"} onClick={() => { setOrientation("portrait"); saveAll({ orientation: "portrait" }); }}>Portrait</Toggle>
               </div>
             </div>
             <div>
-              <Label>Clips / scene</Label>
+              <FieldLabel>Clips per scene</FieldLabel>
               <div className="flex gap-2">
                 <Toggle active={perScene === 2} onClick={() => { setPerScene(2); saveAll({ perScene: 2 }); }}>2</Toggle>
                 <Toggle active={perScene === 4} onClick={() => {
                   setPerScene(4); saveAll({ perScene: 4 });
-                  showToast("More clips to choose from. But scenes load slower and ZIP files get bigger. This does not use up your hourly limit.");
+                  showToast("You get more clips to choose from, but each scene takes longer to load and ZIP files get bigger. It doesn't use up your free searches any faster.");
                 }}>4</Toggle>
               </div>
             </div>
             <div>
-              <Label>Download quality</Label>
+              <FieldLabel>Download quality</FieldLabel>
               <div className="flex gap-2">
                 <Toggle active={quality === "1080"} onClick={() => { setQuality("1080"); saveAll({ quality: "1080" }); }}>1080p</Toggle>
                 <Toggle active={quality === "max"} onClick={() => {
                   setQuality("max"); saveAll({ quality: "max" });
-                  showToast("Saves the biggest file each site has — often 4K, and up to 10× bigger. Slower downloads. Switch back to 1080p any time; it changes nothing about your search results.");
                 }}>Highest</Toggle>
               </div>
             </div>
           </div>
 
-          {/* The two heads-ups that used to live here — one for "Highest", one
-              for "4" — are now the floating notice at the bottom of the screen,
-              fired from the buttons above. Only the costly side of each switch
-              says anything; 1080p and 2 are the quiet defaults. */}
+          {/* Only "4" clips per scene says anything, as the floating notice at the
+              bottom of the screen. "Highest" used to as well; the user asked for
+              no pop-up on it at all (2026-10-08), so it switches silently. */}
         </div>
 
         {/* Long-script heads-up: appears ONLY when the pasted script is big enough
             to risk the hourly limit (rough sentence count — the real quota driver
             is number of scenes, NOT the clips-per-scene setting). Dismissible. */}
         {(() => {
-          const sentences = (splitIntoScenes(script) || []).length;
+          const sentences = roughSceneCount;
           if (sentences < 60 || dismissWarn || analyzing) return null;
           return (
-            <div style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, borderLeft: "3px solid #b8862b" }} className="mt-6 rounded-md px-4 py-3 flex items-start gap-2.5">
-              <AlertTriangle size={15} style={{ color: "#b8862b" }} className="mt-[1px] flex-shrink-0" />
-              <div className="flex-1">
-                <div style={{ ...mono, color: C.ink }} className="text-[11.5px] font-semibold">
-                  This is a long script (about {sentences} scenes)
-                </div>
-                <div style={{ ...mono, color: C.muted }} className="text-[10.5px] leading-relaxed mt-1">
-                  Long scripts do a lot of searches. You may run out of free searches near the end.
-                  That is normal, not a fault. If the footage stops partway, wait an hour and try
-                  again, or add backup keys in Settings.
-                </div>
-              </div>
-              <button onClick={() => setDismissWarn(true)} style={{ ...mono, color: C.muted }} className="text-[10px] px-2 py-1 rounded hover:bg-black/5 flex-shrink-0">Got it</button>
-            </div>
+            <Notice
+              tone="warn"
+              title="Heads up"
+              className="mt-6"
+              action={
+                <button onClick={() => setDismissWarn(true)} style={{ ...sans, color: C.muted }} className="text-[12px] font-medium px-2.5 py-1 rounded hover:bg-black/5">Got it</button>
+              }
+            >
+              <span style={{ color: C.ink }} className="font-semibold">This is a long script (about {sentences} scenes).</span>{" "}
+              Long scripts use a lot of searches, so the free hourly limit may run out near the end.
+              That's normal, nothing is broken. If clips stop loading, wait an hour and try again,
+              or add backup keys in Settings.
+            </Notice>
           );
         })()}
 
@@ -1920,9 +2316,9 @@ function FootageFinder() {
             beat or two, hence "about". */}
         {(() => {
           if (analyzing || !script.trim()) return null;
-          const n = Math.max(1, (splitIntoScenes(script) || []).length);
+          const n = Math.max(1, roughSceneCount);
           return (
-            <div style={{ ...mono, color: C.muted }} className="mt-5 flex items-center justify-center gap-2 text-[11px]">
+            <div style={{ ...sans, color: C.muted }} className="mt-5 flex items-center justify-center gap-2 text-[12px]">
               <Film size={12} className="flex-shrink-0" />
               <span>About {n} {n === 1 ? "scene" : "scenes"} · around {fmtDuration(estimateSeconds({ sceneCount: n }))} to find the footage</span>
             </div>
@@ -1933,56 +2329,73 @@ function FootageFinder() {
         <button
           onClick={runAnalysis}
           disabled={analyzing}
-          style={{ backgroundColor: analyzing ? "#b3a890" : C.brownDark, color: "#f4ead7", ...mono, letterSpacing: "0.14em" }}
-          className="w-full mt-7 py-4 rounded-lg text-[13px] font-semibold uppercase flex items-center justify-center gap-2 transition-colors"
+          style={{ backgroundColor: analyzing ? "#b3a890" : C.brownDark, color: "#f4ead7", ...sans }}
+          className="w-full mt-7 py-4 rounded-lg text-[15px] font-semibold flex items-center justify-center gap-2 transition-colors"
         >
-          {analyzing && <Loader2 size={15} className="animate-spin" />}
-          Analyse Script &amp; Find Footage
+          {analyzing && <Loader2 size={16} className="animate-spin" />}
+          {analyzing ? "Finding footage…" : "Analyse script & find footage"}
         </button>
 
-        {/* status */}
-        <div
-          style={{
-            backgroundColor: C.card,
-            border: `1px solid ${C.line}`,
-            borderLeft: `3px solid ${statusErr ? "#a14b3a" : analyzing ? C.brown : C.green}`,
-          }}
-          className="mt-3 rounded-md px-4 py-3"
-        >
-          <div style={{ ...mono, color: statusErr ? "#a14b3a" : C.inkSoft }} className="text-[12px]">
-            {progress ? progress.label : status}
-          </div>
-          {progress && (
-            <div style={{ backgroundColor: C.paperLine }} className="h-1 rounded mt-2 overflow-hidden">
-              <div style={{ width: `${progress.pct}%`, backgroundColor: C.brown }} className="h-full transition-all duration-300" />
-            </div>
-          )}
-          {/* countdown + a rotating fact, so a long run never looks frozen */}
-          {analyzing && (
-            <div className="mt-2.5">
-              <div style={{ ...mono, color: C.muted }} className="text-[10px]">{etaLabel}</div>
-              {/* key={factIdx} on purpose: it makes React swap the element out for a
-                  new one each time the fact changes, which restarts the ff-fact fade
-                  so one line dissolves into the next instead of snapping over. */}
-              <div key={factIdx} style={{ ...serif, color: C.inkSoft }} className="ff-fact text-[11.5px] italic mt-1.5 leading-snug">
-                {FACTS[factIdx % FACTS.length]}
+        {/* status — same grammar as the toast and the inline notices: a tinted
+            round icon carrying the state (brown = working, green = done, red =
+            error), then the message, the progress bar, and the rotating fact.
+            The coloured left border this used to wear is gone; the icon is where
+            the state lives now. */}
+        {(() => {
+          const tone = statusErr ? C.red : analyzing ? C.brown : C.green;
+          const StatusIcon = statusErr ? AlertTriangle : analyzing ? Loader2 : CheckCircle2;
+          const tintAlpha = C === DARK ? "2e" : "1a";
+          return (
+            <div
+              style={{ backgroundColor: C.card, border: `1px solid ${C.line}` }}
+              className="mt-3 rounded-xl px-4 py-3.5 flex items-start gap-3"
+            >
+              <div
+                style={{ backgroundColor: tone + tintAlpha }}
+                className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5"
+              >
+                <StatusIcon size={14} style={{ color: tone }} className={analyzing ? "animate-spin" : ""} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div style={{ ...sans, color: statusErr ? C.red : C.inkSoft }} className="text-[12.5px] leading-[1.5]">
+                  {progress ? progress.label : status}
+                </div>
+                {progress && (
+                  <div style={{ backgroundColor: C.paperLine }} className="h-1 rounded mt-2 overflow-hidden">
+                    <div style={{ width: `${progress.pct}%`, backgroundColor: C.brown }} className="h-full transition-all duration-300" />
+                  </div>
+                )}
+                {/* countdown + a rotating fact, so a long run never looks frozen */}
+                {analyzing && (
+                  <div className="mt-2.5">
+                    <div style={{ ...sans, color: C.muted }} className="text-[10.5px]">{etaLabel}</div>
+                    {/* key={factIdx} on purpose: it makes React swap the element out for a
+                        new one each time the fact changes, which restarts the ff-fact fade
+                        so one line dissolves into the next instead of snapping over. The
+                        fact is deliberately quiet — plain muted sans, not the serif — so it
+                        sits behind the progress and status, never competing with them. */}
+                    <div key={factIdx} style={{ ...sans, color: C.muted }} className="ff-fact text-[11.5px] mt-1.5 leading-snug">
+                      {FACTS[factIdx % FACTS.length]}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-          )}
-        </div>
+          );
+        })()}
 
         {/* stats */}
         {scenes.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
             {[
-              ["Total Results", stats.total],
-              ["Scenes Analysed", stats.scenes],
+              ["Total results", stats.total],
+              ["Scenes analysed", stats.scenes],
               ["Videos", stats.v],
               ["Photos", stats.p],
             ].map(([k, v]) => (
               <div key={k} className="ff-card rounded-lg px-4 py-3">
                 <div style={{ ...serif, color: C.ink }} className="text-2xl font-bold">{v}</div>
-                <div style={{ ...mono, color: C.muted, letterSpacing: "0.08em" }} className="text-[9px] uppercase mt-0.5">{k}</div>
+                <div style={{ ...overline, color: C.muted }} className="text-[9px] mt-0.5">{k}</div>
               </div>
             ))}
           </div>
@@ -1991,195 +2404,25 @@ function FootageFinder() {
         {/* scenes */}
         <div className="mt-5 space-y-4">
           {scenes.map((s, i) => {
-            const busy = sceneBusy[s.id];
+            const p = pickedByScene.get(s.id) || NO_PICKS;
             return (
-              <React.Fragment key={s.id}>
-              {plusRow(i)}
-              <div style={{ backgroundColor: C.cardAlt, border: `1px solid ${C.line}`, contentVisibility: "auto", containIntrinsicSize: "1px 640px" }} className="ff-scene rounded-lg overflow-hidden">
-                {/* scene head */}
-                <div className="px-4 pt-3.5 pb-3">
-                  <div className="ff-head flex items-start gap-3">
-                    <span style={{ ...mono, color: C.brown }} className="text-[12px] font-bold pt-0.5">{String(i + 1).padStart(2, "0")}</span>
-                    <div className="flex-1 min-w-0">
-                      <div style={{ color: s.inserted ? C.muted : C.ink, fontStyle: s.inserted ? "italic" : "normal" }} className="text-[14px] leading-snug">{s.line}</div>
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <span style={{ color: C.muted }}>→</span>
-                        {editing === s.id ? (
-                          <KeywordInput value={s.keyword} onCommit={(kw) => applyKeyword(s, kw)} />
-                        ) : (
-                          <button
-                            onClick={() => setEditing(s.id)}
-                            style={{ ...mono, color: C.inkSoft }}
-                            className="text-[11px] inline-flex items-center gap-1.5 group"
-                            title="Click to edit this search"
-                          >
-                            {s.keyword ? `"${s.keyword}"` : "type your search here"}
-                            <span
-                              style={{ color: C.brown, border: `1px solid ${C.line}`, backgroundColor: C.card }}
-                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide group-hover:opacity-80"
-                            >
-                              <Pencil size={9} /> edit
-                            </span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div className="ff-tools flex items-center gap-1.5">
-                      {(() => { const ori = s.orientation || orientation; return (
-                        <div style={{ border: `1px solid ${C.line}`, backgroundColor: C.card }} className="flex rounded overflow-hidden mr-0.5">
-                          <button onClick={() => setSceneOrientation(s, "landscape")} disabled={busy} title="Landscape footage for this scene" style={{ backgroundColor: ori === "landscape" ? C.brown : "transparent", color: ori === "landscape" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Monitor size={13} /></button>
-                          <button onClick={() => setSceneOrientation(s, "portrait")} disabled={busy} title="Portrait footage for this scene" style={{ backgroundColor: ori === "portrait" ? C.brown : "transparent", color: ori === "portrait" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Smartphone size={13} /></button>
-                        </div>
-                      ); })()}
-                      <button onClick={() => shuffleScene(s)} disabled={busy} title="Shuffle — new results, same search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Shuffle size={13} /></button>
-                      {s.inserted ? (
-                        // This one's yours, not the AI's. There's no script line behind it
-                        // to spin a fresh angle from, so the slot removes it instead.
-                        <button onClick={() => removeScene(s.id)} disabled={busy} title="Remove this extra search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Trash2 size={13} /></button>
-                      ) : (
-                        <button onClick={() => regenScene(s)} disabled={busy} title="Regenerate — new AI search angle" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><RefreshCw size={13} className={busy ? "animate-spin" : ""} /></button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* grid */}
-                <div className="px-4 pb-3 relative">
-                  {busy && (
-                    <div style={{ backgroundColor: C.veil }} className="absolute inset-0 z-10 flex items-center justify-center rounded">
-                      <Loader2 className="animate-spin" style={{ color: C.brown }} size={20} />
-                    </div>
-                  )}
-                  {s.results.length === 0 ? (
-                    // A card that's still waiting its turn says so, instead of
-                    // wrongly telling you there's nothing to find.
-                    s.loading ? (
-                      <div style={{ ...mono, color: C.muted }} className="ff-pending text-[11px] py-6 text-center flex items-center justify-center gap-2">
-                        <Loader2 className="animate-spin" size={13} /> Finding footage...
-                      </div>
-                    ) : !s.keyword || !s.keyword.trim() ? (
-                      // A row you added yourself, before you've typed anything into
-                      // it. Telling this one to "try Regenerate" would be useless —
-                      // it has no Regenerate button, and nothing to rewrite.
-                      <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">Type what you want to see above, then press Enter.</div>
-                    ) : s.inserted ? (
-                      <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">Nothing found for that. Click the words above to edit them, or try Shuffle.</div>
-                    ) : (
-                      <div style={{ ...mono, color: C.muted }} className="text-[11px] py-6 text-center">No results — try Shuffle or Regenerate.</div>
-                    )
-                  ) : (
-                    // Always the neat responsive grid — 2 columns on phones, 4 on
-                    // desktop — no matter the clips-per-scene setting. (It used to
-                    // narrow to 2 columns for "2 clips" back when that meant only 2
-                    // tiles; now "2 clips" can be 6-8 tiles per source, so it needs
-                    // the same tidy 4-wide layout that "4 clips" uses.)
-                    <div className="grid gap-2 grid-cols-2 sm:grid-cols-4">
-                      {s.results.map((r) => {
-                        const sel = !!selected[selKey(s.id, r.id)];
-                        return (
-                          <div
-                            key={r.id}
-                            onClick={() => toggleSel(r, s.id)}
-                            title={sel ? "Picked. Click to un-pick it." : "Click the picture to pick this clip."}
-                            onMouseEnter={(e) => {
-                              const v = e.currentTarget.querySelector("video");
-                              if (!v) return;
-                              v.style.opacity = "1";   // make visible BEFORE play()...
-                              v.dataset.hover = "1";
-                              requestAnimationFrame(() => {   // ...and wait one frame so Chrome sees it as visible, else it pauses muted video as hidden "background media"
-                                if (v.dataset.hover !== "1") return; // mouse already left
-                                try { v.currentTime = 0; } catch {}
-                                const p = v.play();
-                                if (p && p.catch) p.catch(() => {});
-                              });
-                            }}
-                            onMouseLeave={(e) => {
-                              const v = e.currentTarget.querySelector("video");
-                              if (!v) return;
-                              v.dataset.hover = "";
-                              v.style.opacity = "0";
-                              v.pause();
-                              try { v.currentTime = 0; } catch {}
-                            }}
-                            className="ff-tile group relative rounded-md overflow-hidden cursor-pointer"
-                            style={{ aspectRatio: (s.orientation || orientation) === "portrait" ? "9/16" : "16/10", border: sel ? `2px solid ${C.brown}` : `1px solid ${C.line}`, backgroundColor: C.thumbBg }}
-                          >
-                            {r.thumb ? (
-                              <img src={r.thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center"><Film size={18} style={{ color: C.muted }} /></div>
-                            )}
-                            {/* hover-to-preview inline video (muted, loops). Opacity is driven
-                                by the tile's mouseenter/leave handlers, not group-hover, so the
-                                element is visible at the moment play() runs — otherwise Chrome
-                                pauses it as hidden "background media". */}
-                            {r.type === "video" && r.preview && (
-                              <video
-                                src={r.preview}
-                                poster={r.thumb || undefined}
-                                muted
-                                loop
-                                playsInline
-                                preload="none"
-                                style={{ opacity: 0 }}
-                                className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200 pointer-events-none"
-                              />
-                            )}
-                            {/* type tag */}
-                            <span
-                              style={{ backgroundColor: r.type === "video" ? "rgba(57,39,26,0.9)" : C.green, ...mono }}
-                              className="absolute top-1.5 left-1.5 text-[8px] text-white px-1.5 py-0.5 rounded uppercase tracking-wide flex items-center gap-1"
-                            >
-                              {r.type === "video" ? <Play size={7} /> : <span className="w-1.5 h-1.5 bg-white inline-block rounded-[1px]" />}
-                              {r.type}
-                            </span>
-                            {/* selected check */}
-                            {sel && (
-                              <span style={{ backgroundColor: C.brown }} className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full flex items-center justify-center">
-                                <Check size={10} color="#fff" />
-                              </span>
-                            )}
-                            {/* Action bar. On a mouse it fades in on hover; on a touch screen
-                                the ff-* classes above pin it open and shrink it to icons, since
-                                there is no hover to reveal it and no room for three labels. */}
-                            <div style={{ background: "linear-gradient(to top, rgba(57,39,26,0.92), rgba(57,39,26,0.15) 55%, transparent)" }} className="ff-actions absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end pointer-events-none">
-                              <div className="ff-bar p-2">
-                                <div style={{ ...mono }} className="ff-src text-[8px] text-white/85 mb-1 truncate">{r.label}</div>
-                                <div className="flex items-center gap-1.5">
-                                  {r.type === "video" && r.preview && (
-                                    <button onClick={(e) => { e.stopPropagation(); setPlaying({ ...r, _seq: i + 1, _total: scenes.length, _kw: s.keyword }); }} title="Expand — watch the full clip, big, with sound" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                                      <Play size={9} /> <span className="ff-lbl">Expand</span>
-                                    </button>
-                                  )}
-                                  <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, scenes.length, s.keyword, quality); }} title="Saves this clip to your computer now. To pick it instead, click the picture." style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                                    <Download size={9} /> <span className="ff-lbl">Download</span>
-                                  </button>
-                                  <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="View — open the original page in a new tab" style={{ ...mono }} className="pointer-events-auto flex items-center gap-1 text-[9px] text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                                    <ExternalLink size={9} /> <span className="ff-lbl">View</span>
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* scene foot */}
-                <div style={{ borderTop: `1px solid ${C.line}` }} className="px-4 py-2 flex items-center justify-between">
-                  <span style={{ ...mono, color: C.muted }} className="text-[10px]">{s.results.length} results</span>
-                  <div className="ff-foot flex items-center gap-1.5">
-                    <button onClick={() => selectAll(s)} style={{ ...mono, border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="text-[10px] px-2.5 py-1 rounded hover:opacity-80">Select all</button>
-                    <button onClick={() => clearScene(s)} style={{ ...mono, border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="text-[10px] px-2.5 py-1 rounded hover:opacity-80">Clear</button>
-                  </div>
-                </div>
-              </div>
-              </React.Fragment>
+              <SceneCard
+                key={s.id}
+                s={s}
+                i={i}
+                total={scenes.length}
+                busy={!!sceneBusy[s.id]}
+                isEditing={editing === s.id}
+                picked={p.set}
+                pickedSig={p.sig}
+                orientation={orientation}
+                quality={quality}
+                theme={theme}
+                act={act}
+              />
             );
           })}
-          {scenes.length > 0 && plusRow(scenes.length)}
+          {scenes.length > 0 && <PlusRow at={scenes.length} act={act} />}
         </div>
       </div>
 
@@ -2187,17 +2430,17 @@ function FootageFinder() {
       {selectedCount > 0 && (
         <div style={{ backgroundColor: C.brownDark }} className="ff-dlbar fixed bottom-0 left-0 right-0 z-30 shadow-2xl">
           <div className="ff-dl max-w-5xl mx-auto px-5 sm:px-8 py-3 flex items-center justify-between gap-3">
-            <div style={{ ...mono, color: "#f4ead7" }} className="text-[12px]">
+            <div style={{ ...sans, color: "#f4ead7" }} className="text-[13px]">
               <span className="font-bold">{selectedCount}</span> clip{selectedCount > 1 ? "s" : ""} selected
             </div>
             <div className="flex items-center gap-2 flex-wrap justify-end">
-              <button onClick={exportShotList} disabled={!!zipping} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
+              <button onClick={exportShotList} disabled={!!zipping} style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] font-medium px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
                 <FileText size={12} /> Shot list
               </button>
-              <button onClick={downloadAll} disabled={!!zipping} title="Save each clip as its own separate file" style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
+              <button onClick={downloadAll} disabled={!!zipping} title="Download each clip as a separate file" style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] font-medium px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
                 <Download size={12} /> Files
               </button>
-              <button onClick={downloadZip} disabled={!!zipping} title="Bundle all selected clips into one .zip" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold hover:opacity-90 disabled:opacity-70">
+              <button onClick={downloadZip} disabled={!!zipping} title="Download all your chosen clips in one ZIP file" style={{ ...sans, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold hover:opacity-90 disabled:opacity-70">
                 {zipping ? (
                   <>
                     <Loader2 size={12} className="animate-spin" />
@@ -2207,7 +2450,7 @@ function FootageFinder() {
                   <><Package size={12} /> Download ZIP</>
                 )}
               </button>
-              <button onClick={() => setSelected({})} disabled={!!zipping} style={{ color: "#f4ead7" }} className="p-1.5 rounded hover:bg-white/10 disabled:opacity-40" title="Clear selection">
+              <button onClick={() => setSelected({})} disabled={!!zipping} style={{ color: "#f4ead7" }} className="p-1.5 rounded hover:bg-white/10 disabled:opacity-40" title="Untick all clips">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -2221,11 +2464,11 @@ function FootageFinder() {
           <div onClick={(e) => e.stopPropagation()} className="ff-modal ff-pop w-full max-w-2xl">
             <video src={playing.preview} controls autoPlay className="w-full rounded-lg bg-black" style={{ maxHeight: "70vh" }} />
             <div className="flex items-center justify-between mt-3">
-              <span style={{ ...mono, color: "#f4ead7" }} className="text-[11px]">{playing.label}</span>
+              <span style={{ ...sans, color: "#f4ead7" }} className="text-[12px]">{playing.label}</span>
               <div className="flex gap-2">
-                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw, quality)} title="Save this clip to your computer" style={{ ...mono, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
-                <button onClick={() => window.open(playing.url, "_blank")} style={{ ...mono, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[11px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
-                <button onClick={() => setPlaying(null)} title="Close (or press Escape)" style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
+                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw, quality)} title="Download this clip" style={{ ...sans, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
+                <button onClick={() => window.open(playing.url, "_blank")} style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
+                <button onClick={() => setPlaying(null)} title="Close (or press Esc)" style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
               </div>
             </div>
           </div>
@@ -2238,6 +2481,11 @@ function FootageFinder() {
 /* ------------------------------------------------------------------ */
 /*  WIZARD                                                             */
 /* ------------------------------------------------------------------ */
+// The last Pexels / Pixabay key that passed its check in this tab. Lives outside
+// the wizard so it survives Settings being closed and reopened; a page reload
+// clears it, so a fresh visit still checks each key once.
+const _keyPassed = { px: "", pb: "" };
+
 function Wizard({ initial, onDone, theme, onToggleTheme }) {
   const [step, setStep] = useState(0);
   const [toolName, setToolName] = useState(initial.toolName || "");
@@ -2257,15 +2505,27 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
 
   const steps = ["Brand", "Free sources", "Ready"];
 
+  // A key that already passed in this tab is not tested again. Each test is a real
+  // search out of the free hourly allowance, and they used to go out every time
+  // Settings opened and every time you clicked out of a key box, even when the
+  // key hadn't changed. A changed key, or one that failed, is always tested.
   async function checkPx() {
-    if (!pexelsKey.trim()) { setPxState("idle"); return; }
+    const k = pexelsKey.trim();
+    if (!k) { setPxState("idle"); return; }
+    if (_keyPassed.px === k) { setPxState("ok"); return; }
     setPxState("checking");
-    setPxState((await validatePexels(pexelsKey.trim())) ? "ok" : "bad");
+    const ok = await validatePexels(k);
+    if (ok) _keyPassed.px = k;
+    setPxState(ok ? "ok" : "bad");
   }
   async function checkPb() {
-    if (!pixabayKey.trim()) { setPbState("idle"); return; }
+    const k = pixabayKey.trim();
+    if (!k) { setPbState("idle"); return; }
+    if (_keyPassed.pb === k) { setPbState("ok"); return; }
     setPbState("checking");
-    setPbState((await validatePixabay(pixabayKey.trim())) ? "ok" : "bad");
+    const ok = await validatePixabay(k);
+    if (ok) _keyPassed.pb = k;
+    setPbState(ok ? "ok" : "bad");
   }
 
   // Verify whatever was already saved, once, as the wizard opens. Costs one
@@ -2283,7 +2543,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
   const KeyState = ({ s }) =>
     s === "checking" ? <Loader2 size={14} className="animate-spin" style={{ color: C.muted }} /> :
     s === "ok" ? <CheckCircle2 size={15} style={{ color: C.green }} /> :
-    s === "bad" ? <X size={15} style={{ color: "#a14b3a" }} /> : null;
+    s === "bad" ? <X size={15} style={{ color: C.red }} /> : null;
 
   return (
     <div style={{ backgroundColor: C.paper, ...sans, minHeight: "100vh" }} className="w-full">
@@ -2307,7 +2567,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             </button>
           )}
         </div>
-        <div style={{ ...mono, color: C.muted }} className="text-[11px] mb-6">A one-time setup. Your details are saved on this device.</div>
+        <div style={{ ...sans, color: C.muted }} className="text-[12px] mb-6">You only do this once. Everything is saved on this device.</div>
 
         {/* Stepper. The circles are buttons, not decoration — opening Settings to
             change one thing shouldn't march you through all three screens from
@@ -2321,7 +2581,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               <button
                 onClick={() => reachable && setStep(i)}
                 disabled={!reachable}
-                title={reachable ? `${i + 1}. ${label}` : `${label} — finish the step before it first`}
+                title={reachable ? `${i + 1}. ${label}` : `${label}: finish the step before this one first`}
                 style={{
                   backgroundColor: i <= step ? C.brown : C.cardAlt,
                   color: i <= step ? "#fff" : C.muted,
@@ -2342,11 +2602,11 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
         {step === 0 && (
           <div>
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">Name your tool</h2>
-            <p style={{ color: C.inkSoft }} className="text-sm mb-5">This appears at the top of your finder. Make it yours.</p>
-            <Label>Tool name</Label>
+            <p style={{ color: C.inkSoft }} className="text-sm mb-5">This name shows at the top of the tool. Call it whatever you like.</p>
+            <FieldLabel>Tool name</FieldLabel>
             <input value={toolName} onChange={(e) => setToolName(e.target.value)} placeholder="e.g. Mike's Footage Finder" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mb-4" />
-            <Label>Your name / brand (optional)</Label>
-            <input value={creator} onChange={(e) => setCreator(e.target.value)} placeholder="Shown as 'Built by ...'" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700" />
+            <FieldLabel>Your name / brand (optional)</FieldLabel>
+            <input value={creator} onChange={(e) => setCreator(e.target.value)} placeholder="Shows as “Built by …” under the name" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700" />
             <button onClick={() => setStep(1)} disabled={!toolName.trim()} style={{ backgroundColor: toolName.trim() ? C.brownDark : "#c3b8a1", color: "#f4ead7" }} className="w-full mt-7 py-3 rounded-md text-sm font-semibold flex items-center justify-center gap-2">
               Continue <ArrowRight size={15} />
             </button>
@@ -2357,17 +2617,17 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
         {step === 1 && (
           <div>
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">Connect free sources</h2>
-            <p style={{ color: C.inkSoft }} className="text-sm mb-5">These power your searches. Pexels is required; Pixabay is optional. Both are free.</p>
+            <p style={{ color: C.inkSoft }} className="text-sm mb-5">The tool finds clips on these free stock websites. Each one needs a free key: a code you copy from their website and paste here. Pexels is required. Pixabay is optional.</p>
 
             <div style={card} className="rounded-lg p-4 mb-3">
               <div className="flex items-center justify-between mb-1.5">
-                <div className="flex items-center gap-2"><KeyRound size={14} style={{ color: C.brown }} /><span style={{ color: C.ink }} className="text-sm font-semibold">Pexels API key</span><span style={{ color: "#a14b3a" }} className="text-[10px]">required</span></div>
+                <div className="flex items-center gap-2"><KeyRound size={14} style={{ color: C.brown }} /><span style={{ color: C.ink }} className="text-sm font-semibold">Pexels API key</span><span style={{ color: C.red }} className="text-[10px]">required</span></div>
                 <KeyState s={pxState} />
               </div>
               <a href="https://www.pexels.com/api/new/" target="_blank" rel="noreferrer" style={{ color: C.brown }} className="text-[11px] underline">Get a free key at pexels.com/api →</a>
               <input value={pexelsKey} onChange={(e) => { setPexelsKey(e.target.value); setPxState("idle"); }} onBlur={checkPx} placeholder="Paste your Pexels key" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mt-2" />
-              {pxState === "bad" && <div style={{ color: "#a14b3a", ...mono }} className="text-[10px] mt-1.5">That key didn't work. Check it and try again.</div>}
-              <div style={{ color: C.muted, ...mono }} className="text-[10px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional) — add a 2nd/3rd key from <span style={{ color: C.inkSoft }}>separate free Pexels accounts</span> to triple your hourly limit. Used automatically only when the main key is maxed out.</div>
+              {pxState === "bad" && <div style={{ color: C.red, ...sans }} className="text-[11px] mt-1.5">That key didn't work. Copy it again and paste it here.</div>}
+              <div style={{ color: C.muted, ...sans }} className="text-[11px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional). One Pexels key allows 200 searches an hour. Keys from <span style={{ color: C.inkSoft }}>other free Pexels accounts</span> give you more. The tool only uses them when the main key runs out.</div>
               <input value={pexelsKey2} onChange={(e) => setPexelsKey2(e.target.value)} placeholder="Backup Pexels key #2 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700 mb-1.5" />
               <input value={pexelsKey3} onChange={(e) => setPexelsKey3(e.target.value)} placeholder="Backup Pexels key #3 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700" />
             </div>
@@ -2379,7 +2639,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               </div>
               <a href="https://pixabay.com/api/docs/" target="_blank" rel="noreferrer" style={{ color: C.brown }} className="text-[11px] underline">Get a free key at pixabay.com/api →</a>
               <input value={pixabayKey} onChange={(e) => { setPixabayKey(e.target.value); setPbState("idle"); }} onBlur={checkPb} placeholder="Paste your Pixabay key (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mt-2" />
-              <div style={{ color: C.muted, ...mono }} className="text-[10px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional) — 2nd/3rd key from <span style={{ color: C.inkSoft }}>separate free Pixabay accounts</span>, used automatically when the main one is maxed out.</div>
+              <div style={{ color: C.muted, ...sans }} className="text-[11px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional). Keys from <span style={{ color: C.inkSoft }}>other free Pixabay accounts</span> give you more searches. The tool only uses them when the main key runs out.</div>
               <input value={pixabayKey2} onChange={(e) => setPixabayKey2(e.target.value)} placeholder="Backup Pixabay key #2 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700 mb-1.5" />
               <input value={pixabayKey3} onChange={(e) => setPixabayKey3(e.target.value)} placeholder="Backup Pixabay key #3 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700" />
             </div>
@@ -2389,7 +2649,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               <button onClick={() => setStep(2)} disabled={pxState !== "ok"} style={{ backgroundColor: pxState === "ok" ? C.brownDark : "#c3b8a1", color: "#f4ead7" }} className="flex-1 py-3 rounded-md text-sm font-semibold flex items-center justify-center gap-2">
                 {pxState === "ok" ? <>Continue <ArrowRight size={15} /></>
                   : pxState === "checking" ? <><Loader2 size={15} className="animate-spin" /> Checking your Pexels key…</>
-                  : pxState === "bad" ? "That Pexels key didn't work — fix it to continue"
+                  : pxState === "bad" ? "That Pexels key didn't work. Fix it to continue."
                   : "Paste your Pexels key to continue"}
               </button>
             </div>
@@ -2404,10 +2664,10 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             </div>
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">You're all set</h2>
             <p style={{ color: C.inkSoft }} className="text-sm mb-1"><span className="font-semibold">{toolName || "Your tool"}</span> is ready to go.</p>
-            <p style={{ color: C.muted, ...mono }} className="text-[11px] mb-7">Tip: bookmark your tool's link so you can reopen it anytime without re-pasting anything.</p>
+            <p style={{ color: C.muted, ...sans }} className="text-[12px] mb-7">Tip: bookmark this page. Come back any time and your keys will still be here.</p>
             <div className="flex gap-2">
               <button onClick={() => setStep(1)} style={{ border: `1px solid ${C.line}`, color: C.inkSoft, backgroundColor: C.card }} className="px-4 py-3.5 rounded-md text-sm">Back</button>
-              <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pexelsKey2: pexelsKey2.trim(), pexelsKey3: pexelsKey3.trim(), pixabayKey: pixabayKey.trim(), pixabayKey2: pixabayKey2.trim(), pixabayKey3: pixabayKey3.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...mono, letterSpacing: "0.1em" }} className="flex-1 py-3.5 rounded-md text-[13px] font-semibold uppercase">Open my tool</button>
+              <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pexelsKey2: pexelsKey2.trim(), pexelsKey3: pexelsKey3.trim(), pixabayKey: pixabayKey.trim(), pixabayKey2: pixabayKey2.trim(), pixabayKey3: pixabayKey3.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...sans }} className="flex-1 py-3.5 rounded-md text-[13px] font-semibold">Open my tool</button>
             </div>
           </div>
         )}

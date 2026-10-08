@@ -5,15 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Footage Finder</title>
 
-    <!-- Tailwind (the styling utility classes your app uses) -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Start downloading app.js right now, alongside everything below. It used
+         to wait until every script AND the icons had finished — measured, it only
+         began 4.8 seconds into the load. The boot script at the bottom picks this
+         same download up instead of starting a new one.
 
-    <!-- React + ReactDOM (the app framework), classic global builds -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+         app.js is BUILT from app.jsx (see footage-finder-build/build.mjs). Edit
+         app.jsx, run the build, and upload both. -->
+    <script>window.__ffSource = fetch("./app.js").then((r) => r.text());</script>
 
-    <!-- Babel: lets the browser read the JSX in app.jsx directly, no build step -->
-    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+    <!-- React + ReactDOM (the app framework), classic global builds.
+         Exact versions on purpose: "react@18" made every visit take a redirect
+         first, and a pinned version can never change underneath the tool. -->
+    <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+
+    <!-- One editorial serif (Fraunces) for the display moments only — logo, headline,
+         big numerals. The working interface stays on the system sans stack. font-display:swap
+         means the fallback shows instantly and the page never waits on the font to download. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..700;1,9..144,600&display=swap" rel="stylesheet" />
 
     <style>
       html, body, #root { height: 100%; margin: 0; }
@@ -32,8 +44,8 @@
          The few in app.jsx that mix a colour in (.ff-card, .ff-scroll,
          .ff-tile img) have to stay where the colours are.
 
-         Tailwind's CDN adds its own stylesheet after this one, so anything
-         here that overrules a Tailwind class is marked !important.
+         Tailwind's stylesheet (styles.css) is linked after this block, so
+         anything here that overrules a Tailwind class is marked !important.
          ------------------------------------------------------------------ */
 
       /* ------------------------------------------------------------------
@@ -159,24 +171,46 @@
         .ff-tile:hover img{transform:none !important;}
       }
     </style>
+
+    <!-- Every Tailwind style the tool uses, built ahead of time by
+         footage-finder-build (13 KB). It replaced Tailwind's in-browser compiler
+         (cdn.tailwindcss.com), which re-read the whole page after every change.
+         Linked after the <style> above, the same order the old one landed in. -->
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div id="root"></div>
 
     <!--
       Boot sequence:
-      1. Load the lucide-react icon library as a module and expose it globally.
-      2. Fetch app.jsx as text, compile the JSX to plain JS with Babel,
-         then run it. app.jsx reads React / ReactDOM / lucideReact from globals.
+      1. Load the icons the app uses as modules and expose them globally.
+      2. Run app.js (already downloading since the top of <head>). It is app.jsx
+         turned into plain JavaScript ahead of time by footage-finder-build, and it
+         reads React / ReactDOM / lucideReact from globals.
     -->
     <script type="module">
-      import * as lucideReact from "https://esm.sh/lucide-react@0.462.0?deps=react@18.3.1";
-      window.lucideReact = lucideReact;
+      // Only the icons the tool actually draws, one small file each. Importing
+      // the whole library pulled in all ~1,500 icons (598 KB of script) to show 27.
+      // The names on the left are the ones app.jsx uses; three of them live under
+      // their newer file names (Loader2, CheckCircle2, AlertTriangle). Every one
+      // was checked to draw exactly the same SVG as the full library's version.
+      const ICONS = {
+        Play: "play", Download: "download", ExternalLink: "external-link",
+        Shuffle: "shuffle", RefreshCw: "refresh-cw", Check: "check", X: "x",
+        Film: "film", Image: "image", Sparkles: "sparkles", KeyRound: "key-round",
+        ArrowRight: "arrow-right", Loader2: "loader-circle", FileText: "file-text",
+        Settings: "settings", Pencil: "pencil", CheckCircle2: "circle-check",
+        Circle: "circle", Trash2: "trash-2", Sun: "sun", Moon: "moon",
+        Monitor: "monitor", Smartphone: "smartphone", Package: "package",
+        Info: "info", AlertTriangle: "triangle-alert", Plus: "plus",
+      };
+      const mods = await Promise.all(Object.values(ICONS).map((f) =>
+        import(`https://esm.sh/lucide-react@0.462.0/dist/esm/icons/${f}.js?deps=react@18.3.1`)));
+      window.lucideReact = Object.fromEntries(Object.keys(ICONS).map((name, i) => [name, mods[i].default]));
 
-      const source = await fetch("./app.jsx").then((r) => r.text());
-      const compiled = Babel.transform(source, { presets: ["react"] }).code;
-      // Run at global scope so it can see React/ReactDOM/lucideReact.
-      (0, eval)(compiled);
+      // app.js is already plain JavaScript (built from app.jsx), so it just runs.
+      // At global scope, so it can see React/ReactDOM/lucideReact.
+      (0, eval)(await window.__ffSource);
     </script>
   </body>
 </html>
