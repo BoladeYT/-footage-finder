@@ -1,5 +1,5 @@
 // BUILT FILE - do not edit. Made from app.jsx by footage-finder-build/build.mjs.
-// app.jsx sha256: cfa04481244ed4d7
+// app.jsx sha256: 5f0c66fc148f8449
 // React hooks + icons are provided as globals by index.html (loaded from a CDN).
 // No build step, no npm install — the browser reads this file directly.
 const {
@@ -749,6 +749,17 @@ function clipNeedsProxy(url) {
 function clipProxyURL(url) {
   return `/api/proxy?url=${encodeURIComponent(url)}`;
 }
+// The only sites a clip is ever downloaded from (the same list as api/proxy.js and
+// download-sw.js). Anything else keeps the old download route.
+function clipHostAllowed(url) {
+  let host = "";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return /^https:/i.test(url) && /(^|\.)(pexels|pixabay)\.com$/.test(host);
+}
 
 // Give up on a download only when it has STOPPED, never just because it is slow.
 // The old rule was "25 seconds in total", and on a home connection a normal
@@ -810,6 +821,100 @@ async function fetchClipBlob(item, quality, onProgress) {
     if (!clipNeedsProxy(url)) throw e;
     return await fetchWithProgress(clipProxyURL(url), onProgress);
   }
+}
+
+// Single-clip downloads go straight into the browser's own downloader.
+//
+// Measured 2026-10-10 (DOWNLOAD_REGRESSION_REPORT.md): every version of this tool
+// read the WHOLE clip into the page first and only then asked the browser to save
+// it, so the browser's download bar stayed empty until the very last byte had
+// arrived. The percentage added on the Download button made that wait visible,
+// but didn't shorten it: a 12 MB clip still showed nothing in the browser's
+// downloads for ~30 seconds on a home connection.
+//
+// Now a small helper (download-sw.js) passes the clip on to the browser piece by
+// piece, under the same numbered name, so the browser starts saving as soon as the
+// stock website starts sending (measured: 0.3 s after the click instead of 30 s,
+// same clip, same connection) and shows its own progress. The button keeps its
+// percentage. The helper switches itself on in the background once per visit;
+// until it is ready, or in a browser that can't run it, downloads use the old
+// route above (fetchClipBlob), exactly as before. The ZIP still needs the old
+// route: a ZIP can only be built once every file is in.
+const DL_SCOPE = "./ff-download/";
+let _dlReg = null; // the helper's registration, once the browser accepts it
+let _dlOff = false; // set if the helper ever doesn't answer: old route for the rest of the visit
+const _dlListeners = new Map(); // download id -> message handler
+(function startDownloadHelper() {
+  try {
+    if (!window.isSecureContext || !("serviceWorker" in navigator) || typeof BroadcastChannel !== "function") return;
+    new BroadcastChannel("ff-download").onmessage = e => {
+      const m = e.data || {};
+      const f = _dlListeners.get(m.id);
+      if (f) f(m);
+    };
+    navigator.serviceWorker.register("./download-sw.js", {
+      scope: DL_SCOPE
+    }).then(reg => {
+      _dlReg = reg;
+    }, () => {});
+  } catch {}
+})();
+function nativeDownloadReady(url) {
+  return !_dlOff && !!(_dlReg && _dlReg.active) && clipHostAllowed(url);
+}
+// Resolves "done" | "cancel" | { notAnswering } | { notStarted } | { broke }.
+function nativeDownload(url, name, onProgress) {
+  return new Promise(resolve => {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    // A hidden frame, so the page itself never navigates anywhere: if anything
+    // goes wrong, the frame just stays blank.
+    const frame = document.createElement("iframe");
+    frame.style.display = "none";
+    frame.setAttribute("aria-hidden", "true");
+    frame.tabIndex = -1;
+    let quiet, ping;
+    const settle = (r, browserHasIt) => {
+      clearTimeout(quiet);
+      clearInterval(ping);
+      _dlListeners.delete(id);
+      // Removing the frame before the browser has taken the download over cancels
+      // it, which is exactly what we want when we're falling back.
+      if (browserHasIt) setTimeout(() => frame.remove(), 5000);else frame.remove();
+      resolve(r);
+    };
+    // How long each stage may stay silent before we stop waiting on it. Once the
+    // file is flowing the helper reports at least every 5 seconds.
+    const expect = (ms, r, browserHasIt) => {
+      clearTimeout(quiet);
+      quiet = setTimeout(() => settle(r, browserHasIt), ms);
+    };
+    _dlListeners.set(id, m => {
+      if (m.stage === "ack") expect(DOWNLOAD_STALL_MS + 15000, {
+        notStarted: true
+      });else if (m.stage === "start" || m.stage === "progress") {
+        onProgress(m.size ? Math.min(1, (m.got || 0) / m.size) : null);
+        expect(DOWNLOAD_STALL_MS + 15000, {
+          broke: true
+        }, true);
+      } else if (m.stage === "done") settle("done", true);else if (m.stage === "cancel") settle("cancel", true);else if (m.stage === "fail") settle({
+        notStarted: true
+      });else if (m.stage === "error") settle({
+        broke: true
+      }, true);
+    });
+    // Browsers put an idle helper to sleep; a ping now and then keeps it awake
+    // until the file is done.
+    ping = setInterval(() => {
+      try {
+        _dlReg.active && _dlReg.active.postMessage("ping");
+      } catch {}
+    }, 10000);
+    expect(4000, {
+      notAnswering: true
+    });
+    frame.src = `${DL_SCOPE}${encodeURIComponent(name)}?id=${id}&src=${encodeURIComponent(url)}`;
+    document.body.appendChild(frame);
+  });
 }
 
 // What each Download button shows while its clip is on the way: a percentage,
@@ -876,24 +981,41 @@ async function downloadMedia(item, seq, total, keyword, quality) {
   });
   const name = clipFileName(item, seq, total, keyword);
   let shown = 0;
+  const onProgress = p => {
+    const pct = p == null ? null : Math.floor(p * 100);
+    if (pct !== shown) {
+      shown = pct;
+      setDownloadState(item.id, {
+        pct
+      });
+    }
+  };
   try {
-    const blob = await fetchClipBlob(item, quality, p => {
-      const pct = p == null ? null : Math.floor(p * 100);
-      if (pct !== shown) {
-        shown = pct;
-        setDownloadState(item.id, {
-          pct
-        });
-      }
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    const src = mediaURL(item, quality).trim();
+    let handedOver = false,
+      blob = null;
+    if (nativeDownloadReady(src)) {
+      const r = await nativeDownload(src, name, onProgress);
+      if (r === "cancel") {
+        setDownloadState(item.id, null);
+        return;
+      } // cancelled in the browser: nothing to report
+      if (r === "done") handedOver = true;else if (r.broke) throw r; // stopped part-way: the browser lists it as failed too. Download again retries.
+      else if (r.notAnswering) _dlOff = true; // helper isn't working in this browser: old route, now and from now on
+      else if (clipNeedsProxy(src)) blob = await fetchWithProgress(clipProxyURL(src), onProgress); // Pixabay's second road, as before
+      else throw r;
+    }
+    if (!handedOver) {
+      if (!blob) blob = await fetchClipBlob(item, quality, onProgress);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
     setDownloadState(item.id, {
       done: true
     });

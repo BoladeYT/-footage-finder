@@ -134,6 +134,7 @@ Free, no credit card.
    - `app.js`
    - `styles.css`
    - `app.jsx`
+   - `download-sw.js`
    - `vercel.json`
    - `package.json`
    - `README.md`
@@ -188,6 +189,7 @@ upload but not needed.)
 | `app.jsx` | The editable version of the tool. Kept for reference; the page runs `app.js`. |
 | `api/keywords.js` | Hidden relay that safely holds your Gemini key. |
 | `api/proxy.js` | Lets the "Download ZIP" button bundle Pixabay clips. |
+| `download-sw.js` | Lets a single clip start saving in your browser's downloads the moment you click Download. |
 | `vercel.json` | A tiny settings file for the host. |
 
 ---
