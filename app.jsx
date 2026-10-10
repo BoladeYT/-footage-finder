@@ -80,27 +80,27 @@ const overline = { ...sans, textTransform: "uppercase", letterSpacing: "0.05em",
 // idea each. The user's note was that the old wording had to be read twice, so
 // anything needing a second pass has been split into two simple sentences.
 const FACTS = [
-  "The AI reads your whole script first, so it knows what each line is about.",
-  "In a hurry? Choose 2 clips per scene instead of 4. It's twice as fast.",
-  "Change the picture every 3 to 5 seconds. If one clip stays on too long, people stop watching.",
-  "Use photos too. A slow zoom on a good photo often looks better than a shaky video.",
-  "Your keys are saved only in this browser. Nobody else can see them.",
-  "Files in the ZIP are numbered in script order. Drag them straight into your editor.",
-  "To choose a clip, click its picture. A tick shows up and the clip is added to the bar at the bottom.",
-  "Hover over a video to preview it. Click Expand to watch it bigger, with sound.",
-  "Don't like the clips? Shuffle shows different ones. Regenerate tries new search words.",
-  "You can change any search yourself. Click the words, type, then press Enter.",
-  "Free stock sites are best for everyday things: hands, faces, walking, weather, streets.",
-  "The phone and screen buttons on a scene switch just that scene between tall and wide.",
-  "One Pexels key gives you 200 searches an hour. Add a second key and you get 400.",
-  "Once the AI has read your script, the rest is just searching.",
-  "Read the line out loud. Where you naturally pause is where to cut.",
-  "Try a wide shot, then a close-up, then a face. Three clips make a scene feel planned.",
-  "No subscription. This copy of the tool is yours to keep.",
-  "If a scene finds nothing, the search was too specific. The tool already tried a simpler one.",
-  "Shot list saves a text file of every clip you chose and its scene. Handy if someone else edits.",
-  "If things move left in one clip, keep them moving left in the next. Switching direction feels jumpy.",
-  "Still working. Longer scripts have more scenes, and each scene gets its own search.",
+  "First, the AI reads your whole script. That way, when it picks search words for one line, it knows what the video is about and what comes before and after.",
+  "In a hurry? Under Options, set \"Clips per scene\" to 2 instead of 4. Each scene then loads half as many clips, so the whole run finishes faster.",
+  "Editing tip: change the picture every 3 to 5 seconds. When one clip stays on screen too long, viewers get bored and click away.",
+  "Editing tip: don't skip the photos. In your video editor, a slow zoom across a good photo often looks better than a shaky video clip.",
+  "Your Pexels and Pixabay keys (the codes you pasted during setup) are saved only in this browser, on this device. They are never sent to anyone else.",
+  "When you download your chosen clips as one ZIP file, each file name starts with its scene number (01, 02, 03…). Drag them all into your editor and they line up in script order.",
+  "To choose a clip, click its picture. A tick appears in the corner and the clip is added to the bar at the bottom of the screen. From that bar you can download all your chosen clips at once.",
+  "Rest your mouse on a video to see a silent preview. To watch it bigger, with sound, click Expand.",
+  "Don't like a scene's clips? Shuffle (the crossed arrows) shows different clips for the same search words. Regenerate (the circle arrow) asks the AI for new search words.",
+  "Under each scene's line are the words used to search for it, in quotes. Click them to type your own, then press Enter to search again.",
+  "The free stock websites have lots of everyday footage: hands, faces, people walking, weather, streets. Very specific things, like one brand or one famous place, may only find something close.",
+  "Each scene has a small screen button and a phone button. They switch just that scene between wide clips (for normal YouTube videos) and tall clips (for Shorts and Reels).",
+  "Pexels, the main stock website, lets each free key do 200 searches an hour, and every scene uses a few. Adding a backup key in Settings gives you another 200.",
+  "Once the AI has written search words for every scene, the tool searches the stock websites for each one. That is usually the part you are waiting on.",
+  "Editing tip: read each line out loud. Where you naturally pause is a good place to change to the next clip.",
+  "Editing tip: for one scene, try a wide shot, then a close-up, then a face. Three clips in a row make a scene feel planned.",
+  "There's no subscription to pay. This copy of the tool is yours to keep.",
+  "If a scene shows no clips, its search words were too specific, even after the tool tried a shorter version. Click the search words and try something simpler.",
+  "The Shot list button, in the bar at the bottom, saves a text file listing every clip you chose with its scene and a link. Handy if someone else edits your video.",
+  "Editing tip: if something moves left in one clip, pick a next clip where things also move left. Changing direction between clips feels jumpy.",
+  "Still working. Longer scripts take longer, because every scene gets its own search on the stock websites.",
 ];
 
 // Rough wall-clock estimate for a run, in seconds. Deliberately a little
@@ -255,20 +255,20 @@ function aiFailMessage(msg) {
     case 410:
       // The relay walked its whole list of model names and Google no longer
       // recognises any of them. Nothing here can fix that.
-      return "Google has switched off the AI this tool uses, so the tool needs an update before it can work again. Ask whoever gave you the tool for the latest version.";
+      return "This tool uses Google's free AI (called Gemini) to turn each line of your script into search words. Google has switched off the version this tool uses, so that step can't work until the tool is updated. Ask whoever gave you the tool for the latest version.";
     case 404:
       // Vercel's own "no such page" — the relay file was never uploaded.
-      return "Part of this tool is missing online. The \"api\" folder has to be on GitHub next to index.html. Add it, then click Redeploy in Vercel.";
+      return "The part of your website that talks to Google's AI is missing, so no search words could be written. On GitHub, the \"api\" folder has to sit next to index.html. Upload it, then open Vercel and click Redeploy.";
     case 400:
     case 401:
     case 403:
-      return "Google didn't accept this tool's AI key. In Vercel, go to Settings → Environment Variables, check that GEMINI_KEY is right, then click Redeploy.";
+      return "Google didn't accept the AI key your website uses, so no search words could be written. (This is the Gemini key added in Vercel when the tool was first set up.) In Vercel, go to Settings → Environment Variables, check that GEMINI_KEY is correct, then click Redeploy.";
     case 429:
-      return "Google is slowing this tool down because it asked too often. Wait a minute and try again. Adding a second Gemini key in Vercel stops this happening.";
+      return "Google's free AI only answers a certain number of times per minute, and this run reached that limit. Wait a minute, then press Analyse again. Adding a second Gemini key in Vercel doubles the limit.";
     default:
       // Includes "(timeout)", which carries no number at all: Google was asked
       // and simply never answered.
-      return "Google's AI is busy right now, so the tool couldn't write the search words. Wait a minute and try again.";
+      return "Google's AI, which writes the search words for each scene, is busy right now and didn't answer. This is on Google's side, not yours. Wait a minute, then press Analyse again.";
   }
 }
 
@@ -777,17 +777,57 @@ async function searchScene(q, opts) {
   return results;
 }
 
-// Pixabay's CDN doesn't send the CORS header a browser needs to READ a file's
-// bytes (only to display it), so a direct fetch of a Pixabay clip is blocked —
-// which breaks zipping. We route those through our own /api/proxy, which refetches
-// the file server-side and adds the header. Pexels sends the header, so it's read
-// directly (faster, no server hop).
+// To save a clip with a proper numbered filename, the browser has to read the
+// file's bytes itself, and a site only allows that if it sends a permission
+// header. Pexels always has. Pixabay used not to, so every Pixabay file went
+// through our own relay (/api/proxy), which fetches it on Vercel and passes it on.
+//
+// Re-checked 2026-10-10: Pixabay's file servers now DO send the header (to any
+// page that says where it comes from, which a browser always does). Measured on
+// the user's own connection, the same 3.5 MB clip took 9s direct and 27s through
+// the relay. So Pixabay is now fetched direct too, and the relay is kept only as
+// a backup in case direct is ever refused again.
 function clipNeedsProxy(url) {
   const host = (url || "").replace(/^https?:\/\//, "").split("/")[0].toLowerCase();
   return /(^|\.)pixabay\.com$/.test(host);
 }
-function clipFetchURL(url) {
-  return clipNeedsProxy(url) ? `/api/proxy?url=${encodeURIComponent(url)}` : url;
+function clipProxyURL(url) {
+  return `/api/proxy?url=${encodeURIComponent(url)}`;
+}
+
+// Give up on a download only when it has STOPPED, never just because it is slow.
+// The old rule was "25 seconds in total", and on a home connection a normal
+// 1080p clip takes longer than that — so it was cut off, and the tool then
+// opened the clip in a new tab instead, which is what made the page jump away
+// and back. Now the clock restarts every time a piece of the file arrives.
+const DOWNLOAD_STALL_MS = 30000;
+
+async function fetchWithProgress(url, onProgress) {
+  const ctrl = new AbortController();
+  let timer;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => ctrl.abort(), DOWNLOAD_STALL_MS); };
+  arm();
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const type = res.headers.get("content-type") || "";
+    const size = Number(res.headers.get("content-length")) || 0;
+    if (!res.body || !res.body.getReader) return await res.blob();
+    const reader = res.body.getReader();
+    const parts = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      arm();
+      parts.push(value);
+      got += value.length;
+      if (onProgress) onProgress(size ? got / size : null);
+    }
+    return new Blob(parts, { type });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 // Which of the two links a result carries do we actually fetch? "max" takes the
 // biggest file the site offers, anything else takes the ~1080p pick. Old saved
@@ -796,15 +836,41 @@ function mediaURL(item, quality) {
   if (!item) return "";
   return (quality === "max" ? item.downloadHi || item.download : item.download) || "";
 }
-async function fetchClipBlob(item, quality) {
+async function fetchClipBlob(item, quality, onProgress) {
   const url = mediaURL(item, quality).trim();
   if (!url) throw new Error("no download url"); // count as a skip, not a silent hang
-  // Never wait forever on one clip. A stalled clip used to leave the whole ZIP
-  // spinning with nothing to catch; a timeout throws, so the loop skips it and moves on.
-  const res = await fetch(clipFetchURL(url), { signal: AbortSignal.timeout(25000) });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  return res.blob();
+  try {
+    return await fetchWithProgress(url, onProgress);
+  } catch (e) {
+    // Direct didn't work. For Pixabay there is a second road: our own relay.
+    if (!clipNeedsProxy(url)) throw e;
+    return await fetchWithProgress(clipProxyURL(url), onProgress);
+  }
 }
+
+// What each Download button shows while its clip is on the way: a percentage,
+// then a short "Saved", or a short "Didn't work". Kept outside React, with one
+// listener per clip, so a progress tick redraws that one button and nothing else.
+const _dl = new Map(); // clip id -> { pct } | { done: true } | { failed: true }
+const _dlWatchers = new Map(); // clip id -> Set of redraw callbacks
+function setDownloadState(id, v) {
+  if (v == null) _dl.delete(id); else _dl.set(id, v);
+  (_dlWatchers.get(id) || []).forEach((f) => f());
+}
+function useDownloadState(id) {
+  const [, redraw] = useState(0);
+  useEffect(() => {
+    const f = () => redraw((n) => n + 1);
+    if (!_dlWatchers.has(id)) _dlWatchers.set(id, new Set());
+    _dlWatchers.get(id).add(f);
+    return () => _dlWatchers.get(id).delete(f);
+  }, [id]);
+  return _dl.get(id);
+}
+
+// The page sets this to its floating notice, so a failed download can explain
+// itself even when you are scrolled far from the status line at the top.
+let _notify = () => {};
 
 // The tiny in-browser zip library, loaded on demand from a CDN the first time
 // someone hits "Download ZIP" (kept out of the initial page load).
@@ -841,9 +907,19 @@ function clipFileName(item, seq, total, keyword) {
 }
 
 async function downloadMedia(item, seq, total, keyword, quality) {
+  // Already on its way? Then a second click does nothing. Before, the button gave
+  // no sign it had been pressed, so people pressed it again — and got two, three
+  // copies of the same file once they all finished.
+  const now = _dl.get(item.id);
+  if (now && now.pct !== undefined) return;
+  setDownloadState(item.id, { pct: 0 });
   const name = clipFileName(item, seq, total, keyword);
+  let shown = 0;
   try {
-    const blob = await fetchClipBlob(item, quality);
+    const blob = await fetchClipBlob(item, quality, (p) => {
+      const pct = p == null ? null : Math.floor(p * 100);
+      if (pct !== shown) { shown = pct; setDownloadState(item.id, { pct }); }
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -852,10 +928,55 @@ async function downloadMedia(item, seq, total, keyword, quality) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
+    setDownloadState(item.id, { done: true });
+    setTimeout(() => { if ((_dl.get(item.id) || {}).done) setDownloadState(item.id, null); }, 2500);
   } catch {
-    // Last resort — open the file in a new tab so the user can still save it by hand.
-    window.open(mediaURL(item, quality), "_blank");
+    // This used to open the clip in a new tab as a last resort, which pulled you
+    // off the page. Stay put and say what happened instead.
+    setDownloadState(item.id, { failed: true });
+    setTimeout(() => { if ((_dl.get(item.id) || {}).failed) setDownloadState(item.id, null); }, 4000);
+    _notify(
+      "That clip didn't download. This usually means the internet connection dropped for a moment, " +
+      "or the stock website was slow to answer. Press Download to try again. If it keeps failing, press " +
+      "View: it opens the clip on the stock website, where you can save it yourself."
+    );
   }
+}
+
+// The Download button on a clip and in the big player. Shows how far along the
+// file is the moment you press it, so you can see it working without pressing again.
+//   tile  — the small button in the clip's hover bar. While its clip is
+//           downloading, that bar stays visible even after the mouse moves away,
+//           so the percentage doesn't vanish with it.
+//   modal — the larger button under the big player.
+function DownloadButton({ item, seq, total, keyword, quality, variant }) {
+  const st = useDownloadState(item.id);
+  const ref = useRef(null);
+  const busy = !!st && st.pct !== undefined;
+  useEffect(() => {
+    if (variant !== "tile" || !ref.current) return;
+    const bar = ref.current.closest(".ff-actions");
+    if (bar) bar.style.opacity = st ? "1" : "";
+  }, [st, variant]);
+  const label = busy
+    ? st.pct == null ? "Downloading…" : `${st.pct}%`
+    : st && st.done ? "Saved ✓"
+    : st && st.failed ? "Didn't work"
+    : "Download";
+  const Icon = busy ? Loader2 : st && st.done ? Check : st && st.failed ? AlertTriangle : Download;
+  const onClick = (e) => { e.stopPropagation(); downloadMedia(item, seq, total, keyword, quality); };
+  if (variant === "modal") {
+    return (
+      <button ref={ref} onClick={onClick} title="Download this clip to your computer" style={{ ...sans, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold">
+        <Icon size={12} className={busy ? "animate-spin" : ""} /> {label}
+      </button>
+    );
+  }
+  return (
+    <button ref={ref} onClick={onClick} title="Download this clip to your computer right now. (To collect it with others for one ZIP download, click the picture instead.)" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+      <Icon size={9} className={busy ? "animate-spin" : ""} /> <span className="ff-lbl">{label}</span>
+    </button>
+  );
 }
 
 // When a scene's clips get replaced — Shuffle, Regenerate, an edited keyword, a
@@ -1086,7 +1207,7 @@ function PlusRow({ at, act }) {
   return (
     <button
       onClick={() => act.current.insertScene(at)}
-      title="Add your own search here"
+      title="Add an extra scene here, with your own search words"
       className="ff-seam w-full flex items-center gap-2 opacity-30 hover:opacity-100 transition-opacity"
     >
       <span style={{ borderTop: `1px dashed ${C.line}` }} className="flex-1" />
@@ -1147,7 +1268,7 @@ const SceneCard = React.memo(function SceneCard({ s, i, total, busy, isEditing, 
                     onClick={() => act.current.setEditing(s.id)}
                     style={{ ...mono, color: C.inkSoft }}
                     className="text-[11px] inline-flex items-center gap-1.5 group"
-                    title="Click to change these search words"
+                    title="These are the words used to search the stock websites for this scene. Click to type your own."
                   >
                     {s.keyword ? `"${s.keyword}"` : "type your search here"}
                     <span
@@ -1163,17 +1284,17 @@ const SceneCard = React.memo(function SceneCard({ s, i, total, busy, isEditing, 
             <div className="ff-tools flex items-center gap-1.5">
               {(() => { const ori = s.orientation || orientation; return (
                 <div style={{ border: `1px solid ${C.line}`, backgroundColor: C.card }} className="flex rounded overflow-hidden mr-0.5">
-                  <button onClick={() => act.current.setSceneOrientation(s, "landscape")} disabled={busy} title="Wide footage, for this scene only" style={{ backgroundColor: ori === "landscape" ? C.brown : "transparent", color: ori === "landscape" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Monitor size={13} /></button>
-                  <button onClick={() => act.current.setSceneOrientation(s, "portrait")} disabled={busy} title="Tall footage, for this scene only" style={{ backgroundColor: ori === "portrait" ? C.brown : "transparent", color: ori === "portrait" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Smartphone size={13} /></button>
+                  <button onClick={() => act.current.setSceneOrientation(s, "landscape")} disabled={busy} title="Wide clips (for normal YouTube videos), for this scene only" style={{ backgroundColor: ori === "landscape" ? C.brown : "transparent", color: ori === "landscape" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Monitor size={13} /></button>
+                  <button onClick={() => act.current.setSceneOrientation(s, "portrait")} disabled={busy} title="Tall clips (for Shorts and Reels), for this scene only" style={{ backgroundColor: ori === "portrait" ? C.brown : "transparent", color: ori === "portrait" ? "#fff" : C.inkSoft }} className="p-1.5 hover:opacity-80 disabled:opacity-40"><Smartphone size={13} /></button>
                 </div>
               ); })()}
-              <button onClick={() => act.current.shuffleScene(s)} disabled={busy} title="Shuffle: show different clips for the same search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Shuffle size={13} /></button>
+              <button onClick={() => act.current.shuffleScene(s)} disabled={busy} title="Shuffle: show different clips for the same search words" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Shuffle size={13} /></button>
               {s.inserted ? (
                 // This one's yours, not the AI's. There's no script line behind it
                 // to spin a fresh angle from, so the slot removes it instead.
-                <button onClick={() => act.current.removeScene(s.id)} disabled={busy} title="Remove this search" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Trash2 size={13} /></button>
+                <button onClick={() => act.current.removeScene(s.id)} disabled={busy} title="Remove this extra scene" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><Trash2 size={13} /></button>
               ) : (
-                <button onClick={() => act.current.regenScene(s)} disabled={busy} title="Regenerate: let the AI try new search words" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><RefreshCw size={13} className={busy ? "animate-spin" : ""} /></button>
+                <button onClick={() => act.current.regenScene(s)} disabled={busy} title="Regenerate: ask the AI for new search words, then search again" style={{ border: `1px solid ${C.line}`, backgroundColor: C.card, color: C.inkSoft }} className="p-1.5 rounded hover:opacity-80 disabled:opacity-40"><RefreshCw size={13} className={busy ? "animate-spin" : ""} /></button>
               )}
             </div>
           </div>
@@ -1197,11 +1318,11 @@ const SceneCard = React.memo(function SceneCard({ s, i, total, busy, isEditing, 
               // A row you added yourself, before you've typed anything into
               // it. Telling this one to "try Regenerate" would be useless —
               // it has no Regenerate button, and nothing to rewrite.
-              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Type what you want to see above, then press Enter.</div>
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Type what you'd like to see in the box above (for example "child laughing in a park"), then press Enter.</div>
             ) : s.inserted ? (
-              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Nothing found. Click the words above to change them, or press Shuffle.</div>
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">No clips matched those words. Click the words above and try something simpler, or press Shuffle.</div>
             ) : (
-              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">Nothing found. Press Shuffle or Regenerate to try again.</div>
+              <div style={{ ...sans, color: C.muted }} className="text-[12px] py-6 text-center">No clips matched this scene's search words. Press Shuffle to look again, or Regenerate to get new search words from the AI.</div>
             )
           ) : (
             // Always the neat responsive grid — 2 columns on phones, 4 on
@@ -1216,7 +1337,7 @@ const SceneCard = React.memo(function SceneCard({ s, i, total, busy, isEditing, 
                   <div
                     key={r.id}
                     onClick={() => act.current.toggleSel(r, s.id)}
-                    title={sel ? "Chosen. Click again to remove it." : "Click to choose this clip."}
+                    title={sel ? "Chosen. Click again to un-choose it." : "Click to choose this clip. Chosen clips collect in the bar at the bottom, so you can download them all together."}
                     onMouseEnter={(e) => {
                       const v = e.currentTarget.querySelector("video");
                       if (!v) return;
@@ -1307,10 +1428,8 @@ const SceneCard = React.memo(function SceneCard({ s, i, total, busy, isEditing, 
                               <Play size={9} /> <span className="ff-lbl">Expand</span>
                             </button>
                           )}
-                          <button onClick={(e) => { e.stopPropagation(); downloadMedia(r, i + 1, total, s.keyword, quality); }} title="Download this clip now. (To choose it for later, click the picture instead.)" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
-                            <Download size={9} /> <span className="ff-lbl">Download</span>
-                          </button>
-                          <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="Open this clip's page on the stock site" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
+                          <DownloadButton item={r} seq={i + 1} total={total} keyword={s.keyword} quality={quality} variant="tile" />
+                          <button onClick={(e) => { e.stopPropagation(); window.open(r.url, "_blank"); }} title="Open this clip's page on the stock website (Pexels or Pixabay)" style={{ ...sans }} className="pointer-events-auto flex items-center gap-1 text-[10px] font-medium text-white bg-white/15 hover:bg-white/25 px-1.5 py-1 rounded">
                             <ExternalLink size={9} /> <span className="ff-lbl">View</span>
                           </button>
                         </div>
@@ -1383,7 +1502,7 @@ function FootageFinder() {
   const [script, setScript] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(null);
-  const [status, setStatus] = useState("Paste your script, then press Analyse.");
+  const [status, setStatus] = useState("Paste your video script into the box above, then press Analyse. The tool splits it into scenes and finds stock clips for each one.");
   const [statusErr, setStatusErr] = useState(false);
   const [scenes, setScenes] = useState([]);
   const [selected, setSelected] = useState({});
@@ -1404,9 +1523,14 @@ function FootageFinder() {
   const toastTimer = useRef(null);
   function showToast(text) {
     clearTimeout(toastTimer.current);
-    setToast({ id: Date.now(), text });
-    toastTimer.current = setTimeout(() => setToast(null), 6000); // matches the CSS
+    // Long enough to actually read: about a third of a second per word, never
+    // under 6 seconds. The notices now explain themselves properly, so some run
+    // to 50+ words, and a fixed 6 seconds took them away mid-sentence.
+    const ms = Math.max(6000, text.split(/\s+/).length * 330);
+    setToast({ id: Date.now(), text, ms });
+    toastTimer.current = setTimeout(() => setToast(null), ms);
   }
+  _notify = showToast; // lets a failed download speak up (see downloadMedia)
   function hideToast() {
     clearTimeout(toastTimer.current);
     setToast(null);
@@ -1468,10 +1592,10 @@ function FootageFinder() {
         // days away. "Welcome back" read as odd when it appeared right after F5.
         setStatus(
           n
-            ? `Your last results are still here (${n} scene${n === 1 ? "" : "s"}). Press Analyse to start again.`
+            ? `Your last results are still here (${n} scene${n === 1 ? "" : "s"}), because the page was only refreshed. Press Analyse to run the script again, or Start new video to clear it.`
             : w && w.script
             ? "Your script is still here. Press Analyse when you're ready."
-            : "Paste your script, then press Analyse."
+            : "Paste your video script into the box above, then press Analyse. The tool splits it into scenes and finds stock clips for each one."
         );
       }
       setBooted(true);
@@ -1607,12 +1731,12 @@ function FootageFinder() {
   /* analysis */
   async function runAnalysis() {
     if (!script.trim()) {
-      setStatus("Paste a script first.");
+      setStatus("Paste your script into the box above first, then press Analyse.");
       setStatusErr(true);
       return;
     }
     if (!(sources.pexels && pexelsKeys.length) && !(sources.pixabay && pixabayKeys.length)) {
-      setStatus("Turn on Pexels or Pixabay first. If neither has a key yet, add one in Settings (the gear button).");
+      setStatus("No stock website is switched on, so there is nowhere to search. Under Options, turn on Pexels or Pixabay. If one won't switch on, it has no key yet: open Settings (the gear button, top right) and add one.");
       setStatusErr(true);
       return;
     }
@@ -1744,7 +1868,7 @@ function FootageFinder() {
             acc[i].loading = false;
             changed.add(i);
             finished++;
-            setProgress({ pct: 35 + (finished / acc.length) * 65, label: `Finding clips… ${finished} of ${acc.length} scenes done` });
+            setProgress({ pct: 35 + (finished / acc.length) * 65, label: `Searching the stock websites… ${finished} of ${acc.length} scenes done` });
           }
         };
         const settled = await Promise.allSettled(
@@ -1772,24 +1896,24 @@ function FootageFinder() {
       if (aiTrouble.wrote === 0 && aiTrouble.fellBack > 0) {
         // Nothing came back from the AI all run. The clips on screen were found
         // using the script's own sentences, which is a much rougher search.
-        setStatus(aiFailMessage(aiTrouble.reason) + ` For now the tool searched with your own sentences instead, so these ${total} clips may not match well.`);
+        setStatus(aiFailMessage(aiTrouble.reason) + ` Instead of AI search words, the tool searched using your script's own sentences, so these ${total} clips may not match your script well.`);
         setStatusErr(true);
       } else if (rateHit) {
-        setStatus(`Done, but Pexels' free hourly limit ran out partway through, so some scenes have few or no clips. Wait a few minutes, then press Shuffle on those scenes. (${total} clips across ${acc.length} scenes.)`);
+        setStatus(`Done, but some scenes have few or no clips. Pexels, the stock website, allows 200 free searches an hour for each key, and this run used them up partway through. Wait a while (up to an hour), then press Shuffle on the empty scenes. A backup key in Settings gives you more searches. (${total} clips across ${acc.length} scenes.)`);
         setStatusErr(true);
       } else if (aiTrouble.fellBack > 0) {
         // The AI worked for most scenes but skipped some. Name how many, and
         // point at the button that fixes them one at a time.
-        setStatus(`Done: ${total} clips across ${acc.length} scenes. The AI missed ${aiTrouble.fellBack} scene${aiTrouble.fellBack === 1 ? "" : "s"}, so ${aiTrouble.fellBack === 1 ? "it was" : "those were"} searched with your own words. If a scene looks wrong, press its Regenerate button.`);
+        setStatus(`Done: ${total} clips across ${acc.length} scenes. For ${aiTrouble.fellBack} scene${aiTrouble.fellBack === 1 ? "" : "s"}, the AI didn't send back search words, so the tool searched using that line of your script instead. If a scene's clips look wrong, press its Regenerate button (the circle arrow) to get new AI search words.`);
         setStatusErr(true);
       } else {
         setStatus(`Done: ${total} clips across ${acc.length} scenes.`);
         setStatusErr(false);
       }
     } catch (e) {
-      if (e.message === "PEXELS_AUTH") setStatus("Pexels didn't accept your key. Open Settings (the gear button) and check it.");
+      if (e.message === "PEXELS_AUTH") setStatus("Pexels didn't accept your key, so no clips could load. (The key is the code you copied from pexels.com during setup.) Open Settings with the gear button, top right, and check it or paste it again.");
       else if (e.message?.includes("Claude")) setStatus(aiFailMessage(e.message));
-      else setStatus("Something went wrong. Please try again.");
+      else setStatus("Something went wrong while finding clips. Please press Analyse again. If it keeps happening, refresh the page and try once more.");
       setStatusErr(true);
     } finally {
       setAnalyzing(false);
@@ -1804,7 +1928,7 @@ function FootageFinder() {
   // Shared message when a per-scene re-search can't get anything because Pexels
   // is rate-limited and Pixabay had nothing. Without this the scene silently
   // keeps its old footage and the button looks broken.
-  const RATE_MSG = "Pexels' free hourly limit has run out for now, so new clips couldn't load. Wait a few minutes and try again. Long scripts use up the limit faster.";
+  const RATE_MSG = "No new clips this time. Pexels, the stock website, allows 200 free searches an hour for each key, and that has been used up for now. Wait a while (up to an hour) and try again, or add a backup key in Settings to get more searches.";
   function noteSceneError(e) {
     if (e && e.message === "PEXELS_RATE") { setStatus(RATE_MSG); setStatusErr(true); }
   }
@@ -1981,7 +2105,7 @@ function FootageFinder() {
         ok++;
       }
       if (!ok) {
-        setStatus("Couldn't download any of the chosen clips. Check your internet, or press Files to download them one by one.");
+        setStatus("None of your chosen clips could be downloaded. Check your internet connection and try again. You can also press Files, which downloads the clips one at a time instead of in one ZIP.");
         setStatusErr(true);
         return;
       }
@@ -1997,11 +2121,11 @@ function FootageFinder() {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 3000);
       setStatus(failed
-        ? `ZIP ready with ${ok} clip${ok > 1 ? "s" : ""}. ${failed} couldn't be downloaded and ${failed > 1 ? "were" : "was"} left out. You can try again with the Files button.`
+        ? `ZIP ready with ${ok} clip${ok > 1 ? "s" : ""}. ${failed} couldn't be downloaded (usually a brief internet drop) and ${failed > 1 ? "were" : "was"} left out. Press Files to download your chosen clips one at a time instead.`
         : `ZIP ready: ${ok} clip${ok > 1 ? "s" : ""} in one file. ✓`);
       setStatusErr(false);
     } catch {
-      setStatus("The ZIP maker couldn't load. Your clips are fine. Press Files to download them one by one.");
+      setStatus("The ZIP tool couldn't load, probably because of a brief internet drop. Your chosen clips are still chosen. Press Download ZIP again, or press Files to download them one at a time.");
       setStatusErr(true);
     } finally {
       setZipping(null);
@@ -2073,7 +2197,7 @@ function FootageFinder() {
             quality,
           });
           setStage("app");
-          setStatus("All set. Paste your script, then press Analyse.");
+          setStatus("All set. Paste your video script into the box above, then press Analyse. The tool splits it into scenes and finds stock clips for each one.");
         }}
       />
     );
@@ -2126,6 +2250,9 @@ function FootageFinder() {
                 ? "0 18px 40px -12px rgba(0,0,0,0.65)"
                 : "0 18px 40px -14px rgba(58,42,26,0.28)",
               maxWidth: 430,
+              // The fade-out starts half a second before the notice is removed,
+              // however long this particular notice stays up (see showToast).
+              animationDelay: `0s, ${(toast.ms - 500) / 1000}s`,
             }}
           >
             <div
@@ -2225,7 +2352,7 @@ function FootageFinder() {
           <textarea
             value={script}
             onChange={(e) => { setScript(e.target.value); if (!e.target.value.trim()) setDismissWarn(false); }}
-            placeholder="Paste your script here. The AI reads all of it, then finds clips that fit what each line means, not just its words…"
+            placeholder="Paste your video script here. The AI reads all of it, splits it into scenes, and finds stock clips that match what each line means, not just its words…"
             style={{ backgroundColor: C.card, border: `1px solid ${C.line}`, color: C.ink, ...sans }}
             className="w-full h-44 rounded-lg p-4 text-[14px] leading-relaxed resize-y outline-none focus:border-amber-700"
           />
@@ -2265,7 +2392,7 @@ function FootageFinder() {
                 <Toggle active={perScene === 2} onClick={() => { setPerScene(2); saveAll({ perScene: 2 }); }}>2</Toggle>
                 <Toggle active={perScene === 4} onClick={() => {
                   setPerScene(4); saveAll({ perScene: 4 });
-                  showToast("You get more clips to choose from, but each scene takes longer to load and ZIP files get bigger. It doesn't use up your free searches any faster.");
+                  showToast("4 clips per scene means up to 4 videos and 4 photos from each stock website, so you have more to choose from. Each scene takes a little longer to load and ZIP files get bigger. It doesn't use up your hourly Pexels searches any faster: that limit counts searches, not clips.");
                 }}>4</Toggle>
               </div>
             </div>
@@ -2301,9 +2428,11 @@ function FootageFinder() {
               }
             >
               <span style={{ color: C.ink }} className="font-semibold">This is a long script (about {sentences} scenes).</span>{" "}
-              Long scripts use a lot of searches, so the free hourly limit may run out near the end.
-              That's normal, nothing is broken. If clips stop loading, wait an hour and try again,
-              or add backup keys in Settings.
+              Every scene needs its own searches on Pexels, the stock website, and Pexels allows
+              200 free searches an hour for each key. A script this long may use them up before the
+              end, so the last few scenes could come back empty. That's normal, not a fault. If it
+              happens, wait up to an hour and press Shuffle on those scenes, or add a backup key in
+              Settings to get more searches.
             </Notice>
           );
         })()}
@@ -2437,10 +2566,10 @@ function FootageFinder() {
               <button onClick={exportShotList} disabled={!!zipping} style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] font-medium px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
                 <FileText size={12} /> Shot list
               </button>
-              <button onClick={downloadAll} disabled={!!zipping} title="Download each clip as a separate file" style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] font-medium px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
+              <button onClick={downloadAll} disabled={!!zipping} title="Download each chosen clip as its own file, one after another" style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] font-medium px-3 py-1.5 rounded flex items-center gap-1.5 hover:bg-white/10 disabled:opacity-40">
                 <Download size={12} /> Files
               </button>
-              <button onClick={downloadZip} disabled={!!zipping} title="Download all your chosen clips in one ZIP file" style={{ ...sans, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold hover:opacity-90 disabled:opacity-70">
+              <button onClick={downloadZip} disabled={!!zipping} title="Download all your chosen clips together, in one ZIP file" style={{ ...sans, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold hover:opacity-90 disabled:opacity-70">
                 {zipping ? (
                   <>
                     <Loader2 size={12} className="animate-spin" />
@@ -2450,7 +2579,7 @@ function FootageFinder() {
                   <><Package size={12} /> Download ZIP</>
                 )}
               </button>
-              <button onClick={() => setSelected({})} disabled={!!zipping} style={{ color: "#f4ead7" }} className="p-1.5 rounded hover:bg-white/10 disabled:opacity-40" title="Untick all clips">
+              <button onClick={() => setSelected({})} disabled={!!zipping} style={{ color: "#f4ead7" }} className="p-1.5 rounded hover:bg-white/10 disabled:opacity-40" title="Un-choose all clips">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -2466,7 +2595,7 @@ function FootageFinder() {
             <div className="flex items-center justify-between mt-3">
               <span style={{ ...sans, color: "#f4ead7" }} className="text-[12px]">{playing.label}</span>
               <div className="flex gap-2">
-                <button onClick={() => downloadMedia(playing, playing._seq, playing._total, playing._kw, quality)} title="Download this clip" style={{ ...sans, backgroundColor: "#f4ead7", color: C.brownDark }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5 font-semibold"><Download size={12} /> Download</button>
+                <DownloadButton item={playing} seq={playing._seq} total={playing._total} keyword={playing._kw} quality={quality} variant="modal" />
                 <button onClick={() => window.open(playing.url, "_blank")} style={{ ...sans, color: "#f4ead7", border: "1px solid rgba(244,234,215,0.3)" }} className="text-[12px] px-3 py-1.5 rounded flex items-center gap-1.5"><ExternalLink size={12} /> View</button>
                 <button onClick={() => setPlaying(null)} title="Close (or press Esc)" style={{ color: "#f4ead7" }} className="p-1.5"><X size={18} /></button>
               </div>
@@ -2567,7 +2696,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             </button>
           )}
         </div>
-        <div style={{ ...sans, color: C.muted }} className="text-[12px] mb-6">You only do this once. Everything is saved on this device.</div>
+        <div style={{ ...sans, color: C.muted }} className="text-[12px] mb-6">This takes about two minutes and you only do it once. Everything you enter is saved in this browser, on this device.</div>
 
         {/* Stepper. The circles are buttons, not decoration — opening Settings to
             change one thing shouldn't march you through all three screens from
@@ -2617,7 +2746,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
         {step === 1 && (
           <div>
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">Connect free sources</h2>
-            <p style={{ color: C.inkSoft }} className="text-sm mb-5">The tool finds clips on these free stock websites. Each one needs a free key: a code you copy from their website and paste here. Pexels is required. Pixabay is optional.</p>
+            <p style={{ color: C.inkSoft }} className="text-sm mb-5">Pexels and Pixabay are free websites full of videos and photos you're allowed to use in your own videos. This tool searches them for you. To let it, each site gives you a free key: a long code you get by signing up on their website, then copy and paste here. Pexels is required. Pixabay is optional, but gives you more clips to choose from.</p>
 
             <div style={card} className="rounded-lg p-4 mb-3">
               <div className="flex items-center justify-between mb-1.5">
@@ -2626,8 +2755,8 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               </div>
               <a href="https://www.pexels.com/api/new/" target="_blank" rel="noreferrer" style={{ color: C.brown }} className="text-[11px] underline">Get a free key at pexels.com/api →</a>
               <input value={pexelsKey} onChange={(e) => { setPexelsKey(e.target.value); setPxState("idle"); }} onBlur={checkPx} placeholder="Paste your Pexels key" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mt-2" />
-              {pxState === "bad" && <div style={{ color: C.red, ...sans }} className="text-[11px] mt-1.5">That key didn't work. Copy it again and paste it here.</div>}
-              <div style={{ color: C.muted, ...sans }} className="text-[11px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional). One Pexels key allows 200 searches an hour. Keys from <span style={{ color: C.inkSoft }}>other free Pexels accounts</span> give you more. The tool only uses them when the main key runs out.</div>
+              {pxState === "bad" && <div style={{ color: C.red, ...sans }} className="text-[11px] mt-1.5">That key didn't work. Make sure you copied the whole code from the Pexels website, with no spaces, then paste it again.</div>}
+              <div style={{ color: C.muted, ...sans }} className="text-[11px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional). Each Pexels key allows 200 searches an hour, and a long script can use that up. A key from <span style={{ color: C.inkSoft }}>a second free Pexels account</span> (signed up with a different email) gives you 200 more. The tool only switches to a backup when the main key runs out.</div>
               <input value={pexelsKey2} onChange={(e) => setPexelsKey2(e.target.value)} placeholder="Backup Pexels key #2 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700 mb-1.5" />
               <input value={pexelsKey3} onChange={(e) => setPexelsKey3(e.target.value)} placeholder="Backup Pexels key #3 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700" />
             </div>
@@ -2639,7 +2768,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
               </div>
               <a href="https://pixabay.com/api/docs/" target="_blank" rel="noreferrer" style={{ color: C.brown }} className="text-[11px] underline">Get a free key at pixabay.com/api →</a>
               <input value={pixabayKey} onChange={(e) => { setPixabayKey(e.target.value); setPbState("idle"); }} onBlur={checkPb} placeholder="Paste your Pixabay key (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2.5 text-sm outline-none focus:border-amber-700 mt-2" />
-              <div style={{ color: C.muted, ...sans }} className="text-[11px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional). Keys from <span style={{ color: C.inkSoft }}>other free Pixabay accounts</span> give you more searches. The tool only uses them when the main key runs out.</div>
+              <div style={{ color: C.muted, ...sans }} className="text-[11px] mt-3 mb-1.5 leading-relaxed">Backup keys (optional). A key from <span style={{ color: C.inkSoft }}>a second free Pixabay account</span> (signed up with a different email) gives you more searches. The tool only switches to a backup when the main key runs out.</div>
               <input value={pixabayKey2} onChange={(e) => setPixabayKey2(e.target.value)} placeholder="Backup Pixabay key #2 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700 mb-1.5" />
               <input value={pixabayKey3} onChange={(e) => setPixabayKey3(e.target.value)} placeholder="Backup Pixabay key #3 (optional)" style={inputStyle} className="w-full rounded-md px-3 py-2 text-[13px] outline-none focus:border-amber-700" />
             </div>
@@ -2664,7 +2793,7 @@ function Wizard({ initial, onDone, theme, onToggleTheme }) {
             </div>
             <h2 style={{ ...serif, color: C.ink }} className="text-2xl font-bold mb-2">You're all set</h2>
             <p style={{ color: C.inkSoft }} className="text-sm mb-1"><span className="font-semibold">{toolName || "Your tool"}</span> is ready to go.</p>
-            <p style={{ color: C.muted, ...sans }} className="text-[12px] mb-7">Tip: bookmark this page. Come back any time and your keys will still be here.</p>
+            <p style={{ color: C.muted, ...sans }} className="text-[12px] mb-7">Tip: bookmark this page. Next time, just open the bookmark: your keys and settings will already be here.</p>
             <div className="flex gap-2">
               <button onClick={() => setStep(1)} style={{ border: `1px solid ${C.line}`, color: C.inkSoft, backgroundColor: C.card }} className="px-4 py-3.5 rounded-md text-sm">Back</button>
               <button onClick={() => onDone({ toolName: toolName.trim() || "Footage Finder", creator: creator.trim(), pexelsKey: pexelsKey.trim(), pexelsKey2: pexelsKey2.trim(), pexelsKey3: pexelsKey3.trim(), pixabayKey: pixabayKey.trim(), pixabayKey2: pixabayKey2.trim(), pixabayKey3: pixabayKey3.trim() })} style={{ backgroundColor: C.brownDark, color: "#f4ead7", ...sans }} className="flex-1 py-3.5 rounded-md text-[13px] font-semibold">Open my tool</button>
