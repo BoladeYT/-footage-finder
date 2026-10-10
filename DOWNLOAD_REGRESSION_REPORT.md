@@ -129,7 +129,7 @@ shorten it.
 | Connection cut at 2.5 MB of 6 MB | "Didn't work" at ~6.6 s; nothing saved | Native at 0.31 s. At 6.6 s the browser marks the download **failed** (no truncated file passed off as finished) and the button shows "Didn't work". |
 | Stall (no bytes after 2 MB) | "Didn't work" 30 s after the last byte (~35 s) | Same rule: browser download failed and "Didn't work" at 35.4 s |
 | Pixabay without CORS (relay fallback) | Relay, saved at 9.41 s (2 provider requests) | Helper `fail(network)` at 0.31 s, then relay, saved at **9.38 s** (2 provider requests). One run read 14.1 s: I had a probe running on the same simulated link at the time; the isolated re-run is 9.38 s. |
-| Same, but the clip is over 4.5 MB, with Vercel's 4.5 MB response cap emulated | **"Didn't work"** (relay returns 500) | **"Didn't work"**, identical. Pre-existing; see Known limitations. |
+| Same, but the clip is over 4.5 MB, with Vercel's 4.5 MB response cap emulated | **"Didn't work"** (relay returns 500) | **"Didn't work"**, identical. Pre-existing; fixed by the follow-up in section 6 (now saved, verified). |
 | Helper registered but never answers | n/a | After the 4 s watchdog: old route, saved at 13.0 s, 1 provider request, no duplicate, no tab. The helper is switched off for the rest of the visit. |
 | `download-sw.js` not uploaded | n/a | Old route straight away: saved at 9.12 s (same as before), plus one console 404 for the missing script |
 
@@ -204,7 +204,7 @@ automated test suite to run.
 
 **Known limitations**
 - **ZIP still waits for every file.** It must have all bytes to build the archive. It already fetches 3 at a time; the archive appears when the last file is in.
-- **Pixabay relay fallback (pre-existing, not changed):** `api/proxy.js` buffers the whole file and sends it in one go. Vercel caps such a response at 4.5 MB (`FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`), so if Pixabay ever stops sending CORS again, clips over 4.5 MB fail through the relay. That's true before and after this change. Streaming the relay would fix it, but I couldn't test it on Vercel here.
+- **Pixabay relay fallback:** it used to buffer the whole file and send it in one go, which Vercel caps at 4.5 MB (`FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE`). **Addressed by the follow-up in section 6** (the relay now streams).
 - If someone has a helper download running when a new version of `download-sw.js` is deployed and activates, that one download may be interrupted. Pressing Download again works.
 - **Files** button: Chrome may ask once to "allow multiple downloads", as it already did.
 
@@ -230,3 +230,55 @@ automated test suite to run.
   cache-clearing needed. The helper installs itself on the first page load
   after the deploy. If you click Download within the first moment of that very
   first load, that one download uses the old route.
+
+---
+
+## 6. Follow-up: the Pixabay relay now streams
+
+The relay (`api/proxy.js`) is the fallback for Pixabay clips when the browser
+isn't allowed to read them directly (no CORS header). Single downloads use it
+when the helper reports such a refusal, and ZIP uses it the same way.
+
+**Before:** it collected the whole file first (`await upstream.arrayBuffer()`)
+and then sent it all at once (`res.send(buf)`). That caused three problems:
+
+- Nothing reached the browser until Vercel had the entire clip.
+- Vercel caps a collected reply at 4.5 MB, so most 1080p clips failed.
+- If the person left, the relay kept downloading the rest anyway.
+
+**Change:**
+
+- The relay pipes the provider's reply through as it arrives (`pipeline(Readable.fromWeb(upstream.body), res)`).
+- It passes on the true `Content-Length` (so progress is a real percentage) and keeps the same type, permission and caching headers.
+- If the browser hangs up, it stops fetching from Pixabay.
+- If the source breaks off mid-file, it cuts the connection, so the browser reports a failure instead of saving a short file.
+- `maxDuration` goes from 60 to 300 s (Hobby's maximum), because a streamed big clip on a slow link can need more than 60 s.
+- The request checks are unchanged: missing or bad URL → 400; non-https or non-Pexels/Pixabay host, including look-alikes such as `pixabay.com.evil.com` → 403.
+
+**Measured.** Same harness, Pixabay sending no CORS header, Vercel's 4.5 MB
+collected-reply cap emulated:
+
+| Case | Before (`5d74732`) | After |
+|---|---|---|
+| 3.5 MB clip | Relay's first byte reaches the browser at **9.38 s**; saved at 9.45 s | Relay's first byte at **0.65 s**; saved at 9.40 s; bytes verified |
+| 9 MB clip | **Failed** (500 at 23.1 s) | **Saved** at 23.26 s; bytes verified |
+| Source breaks off at 3 MB of 9 MB | "Didn't work" (502) | "Didn't work". The connection is cut at 8.1 s, so no short file is saved. |
+| Source stalls after 2 MB | n/a | "Didn't work" at 35.6 s (30 s stall rule); relay and its upstream fetch stop |
+| 404 from the source | n/a | 404 passed through; "Didn't work" |
+| Tab closed 5 s into a 9 MB clip | Relay **kept downloading** from Pixabay | Relay and its Pixabay fetch **stopped at 5.0 s** (1.8 MB fetched) |
+| ZIP: Pexels photo + two relayed Pixabay clips (3.5 MB + 9 MB) | (the 9 MB clip would fail) | All 3 files, correct names and order, bytes verified |
+
+**Not verified here:**
+
+- Vercel itself. Two of its documented rules this relies on were checked
+  against Vercel's documentation, not in a test: Node.js functions have
+  streamed by default since 2024 (Hobby from July 2024), and streamed replies
+  aren't subject to the 4.5 MB cap. If streaming were somehow off for this
+  project, Vercel would collect the reply first, exactly like the old code,
+  so this change can't make things worse.
+- The 300 s limit applies to projects with Fluid compute, which is on by
+  default for projects created since 2025. The pull request's Vercel
+  preview build is where a problem with that setting would show up.
+- Vercel's docs also mention a 128 MB ceiling on a streamed reply. A rare 4K
+  "Highest quality" clip above that may still fail through the relay; direct
+  and helper downloads are unaffected.
