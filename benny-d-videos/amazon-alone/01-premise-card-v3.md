@@ -1,5 +1,5 @@
 ## PREMISE CARD: Amazon Alone
-Status: Draft, awaiting your go
+Status: Approved by the creator on 2026-10-31 (title kept as a leaning)
 
 **Working promise:** Could you survive being lost alone in the Amazon, when the things that hurt you most aren't the ones you came in fearing?
 
