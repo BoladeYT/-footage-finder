@@ -1,5 +1,5 @@
 # STORY MAP: Amazon Alone
-Status: Draft for your review · Version: 3
+Status: Approved by the creator on 2026-10-31 · Version: 3
 Changed from v2 (marked [v3]): "you" shout on night 1 and the search starts at first light (B05, B06, B15, assumptions, setups); B16 lightened. Personal stake (suggestion 3) not added.
 Changed from v1: Benny D wording clarified. No story change.
 
