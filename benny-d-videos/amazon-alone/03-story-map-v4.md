@@ -1,5 +1,5 @@
 # STORY MAP: Amazon Alone
-Status: Draft for your review · Version: 4
+Status: Approved by the creator on 2026-11-01 · Version: 4
 Changed from v3 (marked [v4]): the 13 repairs you approved at final review. Faster hook; the jaguar returns at night; a longer second night with mosquitoes; the snake costs daylight and the time markers are fixed; snakebite advice comes from the lodge's safety talk and the hospital statistic goes; the lancehead is named; the phone and rain-versus-pool lines; why nobody heard the searchers; a boat that passes without seeing you before the rescue; a shorter ending with a corrected fever warning, a clearer lesson, and "The jungle didn't trap you. Your senses did." as the last line.
 Earlier changes: v3 shouting and search timing, lighter B16; v2 Benny D wording.
 

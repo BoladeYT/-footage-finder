@@ -1,0 +1,5 @@
+# WRITER NOTES: Amazon Alone (Script draft v2, revision for Story Map v4)
+
+- Better idea: B16 echoes the opening line ("Twenty minutes. That's how long the walk was supposed to take.") just before the final line, as the map's refrains note allows. If it feels like one beat too many, it can be cut without changing anything else.
+- Map conflict (resolved in the telling): the map's Setups and payoffs say the wet feet are "named (B16)". To keep B16 at about half its old length, the script says "Your feet take days to recover" without naming tropical immersion foot again. B12 still carries the two days of wet feet.
+- Length: about 2,700 spoken words, about 18 minutes at R = 150, up from about 16. The extra comes from the approved longer second night (B11), the new passing boat (B13a) and the jaguar returning on night 1 (B05). B01 and B07 are shorter. B16 is about a quarter shorter, not half, because the corrected fever warning now covers both risks with the right time window. Nothing was padded.
